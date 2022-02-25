@@ -1,0 +1,1202 @@
+diff -ur ./firecracker-control/local.go /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/firecracker-control/local.go
+--- ./firecracker-control/local.go	2022-02-11 11:21:52.613311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/firecracker-control/local.go	2022-02-25 13:37:31.107472996 +0800
+ func (s *local) waitForShimToExit(ctx context.Context, vmID string) error {
+ 	socketAddr, err := shim.SocketAddress(ctx, s.containerdAddress, vmID)
+ 	if err != nil {
+@@ -596,3 +560,95 @@
+ 
+ 	return nil
+ }
++
++// CreateSnapshot Creates a snapshot of a VM
++func (s *local) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotRequest) (*empty.Empty, error) {
++	client, err := s.shimFirecrackerClient(ctx, req.VMID)
++	if err != nil {
++		return nil, err
++	}
++
++	defer client.Close()
++
++	resp, err := client.CreateSnapshot(ctx, req)
++	if err != nil {
++		s.logger.WithError(err).Error()
++		return nil, err
++	}
++
++	return resp, nil
++}
++
++// LoadSnapshot Loads a snapshot of a VM
++func (s *local) LoadSnapshot(ctx context.Context, req *proto.LoadSnapshotRequest) (*proto.LoadResponse, error) {
++	client, err := s.shimFirecrackerClient(ctx, req.VMID)
++	if err != nil {
++		return nil, err
++	}
++
++	defer client.Close()
++
++	resp, err := client.LoadSnapshot(ctx, req)
++	if err != nil {
++		s.logger.WithError(err).Error()
++		return nil, err
++	}
++
++	return resp, nil
++}
++
++// Offload Shuts down a VM started through the firecracker go sdk and deletes
++// the corresponding firecracker socket. All of the other resources (shim, other sockets)
++// will persist.
++func (s *local) Offload(ctx context.Context, req *proto.OffloadRequest) (*empty.Empty, error) {
++	client, err := s.shimFirecrackerClient(ctx, req.VMID)
++	if err != nil {
++		return nil, err
++	}
++
++	defer client.Close()
++
++	resp, err := client.Offload(ctx, req)
++	if err != nil {
++		s.logger.WithError(err).Error()
++		return nil, err
++	}
++
++	return resp, nil
++}
+diff -ur ./firecracker-control/service.go /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/firecracker-control/service.go
+--- ./firecracker-control/service.go	2022-02-11 11:21:52.613311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/firecracker-control/service.go	2022-02-25 13:37:31.107472996 +0800
+@@ -126,3 +126,18 @@
+ 	log.G(ctx).Debug("Updating balloon device statistics polling interval")
+ 	return s.local.UpdateBalloonStats(ctx, req)
+ }
++
++func (s *service) LoadSnapshot(ctx context.Context, req *proto.LoadSnapshotRequest) (*proto.LoadResponse, error) {
++	log.G(ctx).Debugf("load snapshot request: %+v", req)
++	return s.local.LoadSnapshot(ctx, req)
++}
++
++func (s *service) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotRequest) (*empty.Empty, error) {
++	log.G(ctx).Debugf("create snapshot request: %+v", req)
++	return s.local.CreateSnapshot(ctx, req)
++}
++
++func (s *service) Offload(ctx context.Context, req *proto.OffloadRequest) (*empty.Empty, error) {
++	log.G(ctx).Debugf("offload request: %+v", req)
++	return s.local.Offload(ctx, req)
++}
+diff -ur ./proto/firecracker.pb.go /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/firecracker.pb.go
+--- ./proto/firecracker.pb.go	2022-02-11 11:21:52.613311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/firecracker.pb.go	2022-02-25 13:37:31.107472996 +0800
+ type PauseVMRequest struct {
+ 	VMID                 string   `protobuf:"bytes,1,opt,name=VMID,json=vMID,proto3" json:"VMID,omitempty"`
+ 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+@@ -669,6 +685,198 @@
+ 	return ""
+ }
+ 
++type CreateSnapshotRequest struct {
++	VMID                 string   `protobuf:"bytes,1,opt,name=VMID,json=vMID,proto3" json:"VMID,omitempty"`
++	SnapshotFilePath     string   `protobuf:"bytes,2,opt,name=SnapshotFilePath,json=snapshotFilePath,proto3" json:"SnapshotFilePath,omitempty"`
++	MemFilePath          string   `protobuf:"bytes,3,opt,name=MemFilePath,json=memFilePath,proto3" json:"MemFilePath,omitempty"`
++	XXX_NoUnkeyedLiteral struct{} `json:"-"`
++	XXX_unrecognized     []byte   `json:"-"`
++	XXX_sizecache        int32    `json:"-"`
++}
++
++func (m *CreateSnapshotRequest) Reset()         { *m = CreateSnapshotRequest{} }
++func (m *CreateSnapshotRequest) String() string { return proto.CompactTextString(m) }
++func (*CreateSnapshotRequest) ProtoMessage()    {}
++func (*CreateSnapshotRequest) Descriptor() ([]byte, []int) {
++	return fileDescriptor_a73317e9fb8da571, []int{11}
++}
++func (m *CreateSnapshotRequest) XXX_Unmarshal(b []byte) error {
++	return xxx_messageInfo_CreateSnapshotRequest.Unmarshal(m, b)
++}
++func (m *CreateSnapshotRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
++	return xxx_messageInfo_CreateSnapshotRequest.Marshal(b, m, deterministic)
++}
++func (m *CreateSnapshotRequest) XXX_Merge(src proto.Message) {
++	xxx_messageInfo_CreateSnapshotRequest.Merge(m, src)
++}
++func (m *CreateSnapshotRequest) XXX_Size() int {
++	return xxx_messageInfo_CreateSnapshotRequest.Size(m)
++}
++func (m *CreateSnapshotRequest) XXX_DiscardUnknown() {
++	xxx_messageInfo_CreateSnapshotRequest.DiscardUnknown(m)
++}
++
++var xxx_messageInfo_CreateSnapshotRequest proto.InternalMessageInfo
++
++func (m *CreateSnapshotRequest) GetVMID() string {
++	if m != nil {
++		return m.VMID
++	}
++	return ""
++}
++
++func (m *CreateSnapshotRequest) GetSnapshotFilePath() string {
++	if m != nil {
++		return m.SnapshotFilePath
++	}
++	return ""
++}
++
++func (m *CreateSnapshotRequest) GetMemFilePath() string {
++	if m != nil {
++		return m.MemFilePath
++	}
++	return ""
++}
++
++type LoadSnapshotRequest struct {
++	VMID                 string   `protobuf:"bytes,1,opt,name=VMID,json=vMID,proto3" json:"VMID,omitempty"`
++	SnapshotFilePath     string   `protobuf:"bytes,2,opt,name=SnapshotFilePath,json=snapshotFilePath,proto3" json:"SnapshotFilePath,omitempty"`
++	MemFilePath          string   `protobuf:"bytes,3,opt,name=MemFilePath,json=memFilePath,proto3" json:"MemFilePath,omitempty"`
++	EnableUserPF         bool     `protobuf:"varint,4,opt,name=EnableUserPF,json=enableUserPF,proto3" json:"EnableUserPF,omitempty"`
++	XXX_NoUnkeyedLiteral struct{} `json:"-"`
++	XXX_unrecognized     []byte   `json:"-"`
++	XXX_sizecache        int32    `json:"-"`
++}
++
++func (m *LoadSnapshotRequest) Reset()         { *m = LoadSnapshotRequest{} }
++func (m *LoadSnapshotRequest) String() string { return proto.CompactTextString(m) }
++func (*LoadSnapshotRequest) ProtoMessage()    {}
++func (*LoadSnapshotRequest) Descriptor() ([]byte, []int) {
++	return fileDescriptor_a73317e9fb8da571, []int{12}
++}
++func (m *LoadSnapshotRequest) XXX_Unmarshal(b []byte) error {
++	return xxx_messageInfo_LoadSnapshotRequest.Unmarshal(m, b)
++}
++func (m *LoadSnapshotRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
++	return xxx_messageInfo_LoadSnapshotRequest.Marshal(b, m, deterministic)
++}
++func (m *LoadSnapshotRequest) XXX_Merge(src proto.Message) {
++	xxx_messageInfo_LoadSnapshotRequest.Merge(m, src)
++}
++func (m *LoadSnapshotRequest) XXX_Size() int {
++	return xxx_messageInfo_LoadSnapshotRequest.Size(m)
++}
++func (m *LoadSnapshotRequest) XXX_DiscardUnknown() {
++	xxx_messageInfo_LoadSnapshotRequest.DiscardUnknown(m)
++}
++
++var xxx_messageInfo_LoadSnapshotRequest proto.InternalMessageInfo
++
++func (m *LoadSnapshotRequest) GetVMID() string {
++	if m != nil {
++		return m.VMID
++	}
++	return ""
++}
++
++func (m *LoadSnapshotRequest) GetSnapshotFilePath() string {
++	if m != nil {
++		return m.SnapshotFilePath
++	}
++	return ""
++}
++
++func (m *LoadSnapshotRequest) GetMemFilePath() string {
++	if m != nil {
++		return m.MemFilePath
++	}
++	return ""
++}
++
++func (m *LoadSnapshotRequest) GetEnableUserPF() bool {
++	if m != nil {
++		return m.EnableUserPF
++	}
++	return false
++}
++
++type LoadResponse struct {
++	FirecrackerPID       string   `protobuf:"bytes,1,opt,name=FirecrackerPID,json=firecrackerPID,proto3" json:"FirecrackerPID,omitempty"`
++	XXX_NoUnkeyedLiteral struct{} `json:"-"`
++	XXX_unrecognized     []byte   `json:"-"`
++	XXX_sizecache        int32    `json:"-"`
++}
++
++func (m *LoadResponse) Reset()         { *m = LoadResponse{} }
++func (m *LoadResponse) String() string { return proto.CompactTextString(m) }
++func (*LoadResponse) ProtoMessage()    {}
++func (*LoadResponse) Descriptor() ([]byte, []int) {
++	return fileDescriptor_a73317e9fb8da571, []int{13}
++}
++func (m *LoadResponse) XXX_Unmarshal(b []byte) error {
++	return xxx_messageInfo_LoadResponse.Unmarshal(m, b)
++}
++func (m *LoadResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
++	return xxx_messageInfo_LoadResponse.Marshal(b, m, deterministic)
++}
++func (m *LoadResponse) XXX_Merge(src proto.Message) {
++	xxx_messageInfo_LoadResponse.Merge(m, src)
++}
++func (m *LoadResponse) XXX_Size() int {
++	return xxx_messageInfo_LoadResponse.Size(m)
++}
++func (m *LoadResponse) XXX_DiscardUnknown() {
++	xxx_messageInfo_LoadResponse.DiscardUnknown(m)
++}
++
++var xxx_messageInfo_LoadResponse proto.InternalMessageInfo
++
++func (m *LoadResponse) GetFirecrackerPID() string {
++	if m != nil {
++		return m.FirecrackerPID
++	}
++	return ""
++}
++
++type OffloadRequest struct {
++	VMID                 string   `protobuf:"bytes,1,opt,name=VMID,json=vMID,proto3" json:"VMID,omitempty"`
++	XXX_NoUnkeyedLiteral struct{} `json:"-"`
++	XXX_unrecognized     []byte   `json:"-"`
++	XXX_sizecache        int32    `json:"-"`
++}
++
++func (m *OffloadRequest) Reset()         { *m = OffloadRequest{} }
++func (m *OffloadRequest) String() string { return proto.CompactTextString(m) }
++func (*OffloadRequest) ProtoMessage()    {}
++func (*OffloadRequest) Descriptor() ([]byte, []int) {
++	return fileDescriptor_a73317e9fb8da571, []int{14}
++}
++func (m *OffloadRequest) XXX_Unmarshal(b []byte) error {
++	return xxx_messageInfo_OffloadRequest.Unmarshal(m, b)
++}
++func (m *OffloadRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
++	return xxx_messageInfo_OffloadRequest.Marshal(b, m, deterministic)
++}
++func (m *OffloadRequest) XXX_Merge(src proto.Message) {
++	xxx_messageInfo_OffloadRequest.Merge(m, src)
++}
++func (m *OffloadRequest) XXX_Size() int {
++	return xxx_messageInfo_OffloadRequest.Size(m)
++}
++func (m *OffloadRequest) XXX_DiscardUnknown() {
++	xxx_messageInfo_OffloadRequest.DiscardUnknown(m)
++}
++
++var xxx_messageInfo_OffloadRequest proto.InternalMessageInfo
++
++func (m *OffloadRequest) GetVMID() string {
++	if m != nil {
++		return m.VMID
++	}
++	return ""
++}
++
+ }
+ func (m *UpdateBalloonStatsRequest) XXX_Unmarshal(b []byte) error {
+ 	return xxx_messageInfo_UpdateBalloonStatsRequest.Unmarshal(m, b)
+@@ -1154,6 +1362,10 @@
+ 	proto.RegisterType((*UpdateVMMetadataRequest)(nil), "UpdateVMMetadataRequest")
+ 	proto.RegisterType((*GetVMMetadataRequest)(nil), "GetVMMetadataRequest")
+ 	proto.RegisterType((*GetVMMetadataResponse)(nil), "GetVMMetadataResponse")
++	proto.RegisterType((*CreateSnapshotRequest)(nil), "CreateSnapshotRequest")
++	proto.RegisterType((*LoadSnapshotRequest)(nil), "LoadSnapshotRequest")
++	proto.RegisterType((*LoadResponse)(nil), "LoadResponse")
++	proto.RegisterType((*OffloadRequest)(nil), "OffloadRequest")
+ 	proto.RegisterType((*JailerConfig)(nil), "JailerConfig")
+ 	proto.RegisterType((*UpdateBalloonRequest)(nil), "UpdateBalloonRequest")
+ 	proto.RegisterType((*GetBalloonConfigRequest)(nil), "GetBalloonConfigRequest")
+diff -ur ./proto/firecracker.proto /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/firecracker.proto
+--- ./proto/firecracker.proto	2022-02-11 11:21:52.613311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/firecracker.proto	2022-02-25 13:37:31.107472996 +0800
+@@ -49,6 +49,8 @@
+     string LogFifoPath = 3;
+     string MetricsFifoPath = 4;
+     string CgroupPath = 5;
++    string UPFSockPath = 6;
++    string FirecrackerPID = 7;
+ }
+ 
+ message PauseVMRequest {
+@@ -103,6 +105,28 @@
+     BIND = 1;
+ }
+ 
++message CreateSnapshotRequest {
++    string VMID = 1;
++    string SnapshotFilePath = 2;
++    string MemFilePath = 3;
++}
++
++message LoadSnapshotRequest {
++    string VMID = 1;
++    string SnapshotFilePath = 2;
++    string MemFilePath = 3;
++    bool EnableUserPF = 4;
++}
++
++message LoadResponse {
++    string FirecrackerPID = 1;
++}
++
++message OffloadRequest {
++    string VMID = 1;
++}
++
++
+ message JailerConfig {
+     string NetNS = 1;
+     // List of the physical numbers of the CPUs on which processes in that
+diff -ur ./proto/service/fccontrol/fccontrol.proto /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/service/fccontrol/fccontrol.proto
+--- ./proto/service/fccontrol/fccontrol.proto	2022-02-11 11:21:52.617311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/service/fccontrol/fccontrol.proto	2022-02-25 13:37:31.107472996 +0800
+@@ -15,7 +15,7 @@
+ 
+     // Resumes a VM
+     rpc ResumeVM(ResumeVMRequest) returns (google.protobuf.Empty);
+-
++    
+     // Stops existing Firecracker instance by VM ID
+     rpc StopVM(StopVMRequest) returns (google.protobuf.Empty);
+ 
+@@ -42,4 +42,13 @@
+ 
+     // Updates a balloon device statistics polling interval.
+     rpc UpdateBalloonStats(UpdateBalloonStatsRequest) returns(google.protobuf.Empty);
++
++    // Loads VM from snapshot
++    rpc LoadSnapshot(LoadSnapshotRequest) returns (LoadResponse);
++
++    // Make a snapshot of a VM
++    rpc CreateSnapshot(CreateSnapshotRequest) returns (google.protobuf.Empty);
++
++    // Offload a snapshotted VM
++    rpc Offload(OffloadRequest) returns (google.protobuf.Empty);
+ }
+diff -ur ./proto/service/fccontrol/ttrpc/fccontrol.pb.go /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/service/fccontrol/ttrpc/fccontrol.pb.go
+--- ./proto/service/fccontrol/ttrpc/fccontrol.pb.go	2022-02-11 11:21:52.617311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/proto/service/fccontrol/ttrpc/fccontrol.pb.go	2022-02-25 13:37:31.107472996 +0800
+@@ -27,30 +27,33 @@
+ func init() { proto.RegisterFile("fccontrol.proto", fileDescriptor_b99f53e2bf82c5ef) }
+ 
+ var fileDescriptor_b99f53e2bf82c5ef = []byte{
+-	// 357 bytes of a gzipped FileDescriptorProto
+-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x93, 0x3f, 0x4f, 0xf2, 0x50,
+-	0x14, 0xc6, 0xe9, 0xf0, 0xf2, 0xc2, 0x35, 0x08, 0xdc, 0x04, 0x45, 0x4c, 0xba, 0xb8, 0x1f, 0x0c,
+-	0x3a, 0x33, 0x80, 0x5a, 0x1d, 0x9a, 0x18, 0x88, 0x0c, 0x6e, 0x97, 0x72, 0x4a, 0x88, 0xa5, 0xb7,
+-	0xb6, 0xa7, 0x83, 0x9b, 0x1f, 0x8f, 0xd1, 0xd1, 0x51, 0xba, 0xfb, 0x1d, 0x0c, 0xb4, 0x97, 0x3f,
+-	0x85, 0xe4, 0x6e, 0xcf, 0xf9, 0x9d, 0x9e, 0xe7, 0x3c, 0xf7, 0x24, 0x65, 0x55, 0xd7, 0x71, 0xa4,
+-	0x4f, 0xa1, 0xf4, 0x20, 0x08, 0x25, 0xc9, 0xd6, 0xe5, 0x54, 0xca, 0xa9, 0x87, 0xed, 0x75, 0x35,
+-	0x8e, 0xdd, 0x36, 0xce, 0x03, 0xfa, 0xc8, 0x9a, 0x75, 0x77, 0x16, 0xa2, 0x13, 0x0a, 0xe7, 0x0d,
+-	0xc3, 0x14, 0x75, 0x7e, 0xff, 0xb1, 0x93, 0x87, 0x2d, 0xe5, 0x6d, 0x56, 0xea, 0x87, 0x28, 0x08,
+-	0x47, 0x36, 0xaf, 0x81, 0x92, 0x03, 0x7c, 0x8f, 0x31, 0xa2, 0x56, 0x7d, 0x87, 0x44, 0x81, 0xf4,
+-	0x23, 0xe4, 0x1d, 0xf6, 0xff, 0x59, 0xc4, 0xd1, 0xea, 0xfb, 0x2a, 0x64, 0x4a, 0x7d, 0x7e, 0x06,
+-	0x69, 0x1a, 0x50, 0x69, 0xe0, 0x7e, 0x95, 0x86, 0xdf, 0xb2, 0xd2, 0x00, 0xa3, 0x78, 0x9e, 0x2e,
+-	0x51, 0x52, 0x37, 0x75, 0xcd, 0x8a, 0x43, 0x92, 0xc1, 0xc8, 0xe6, 0xa7, 0x90, 0x0a, 0xdd, 0x44,
+-	0x87, 0x95, 0x2d, 0xa4, 0x91, 0xfd, 0xe4, 0xbb, 0x92, 0xd7, 0x61, 0xa3, 0xd5, 0x1c, 0xdf, 0x45,
+-	0xd9, 0x7b, 0xba, 0xac, 0x32, 0x5c, 0x41, 0x1b, 0x49, 0x4c, 0x04, 0x09, 0xde, 0x80, 0xbd, 0x5a,
+-	0xb7, 0xf3, 0x8e, 0xd5, 0x5e, 0x82, 0xc9, 0xfa, 0x46, 0x1b, 0x8b, 0x26, 0xe4, 0x91, 0xce, 0xa5,
+-	0xcb, 0x2a, 0x56, 0x2e, 0x85, 0x75, 0x3c, 0x45, 0x0e, 0x67, 0xaf, 0xb0, 0x58, 0xcd, 0x42, 0xea,
+-	0x09, 0xcf, 0x93, 0xd2, 0xef, 0x4b, 0xdf, 0x9d, 0x4d, 0x79, 0x13, 0xf2, 0x48, 0xb9, 0x5c, 0x1c,
+-	0xe9, 0x6c, 0xcf, 0x91, 0x66, 0xcf, 0xda, 0xbc, 0x01, 0x7b, 0xb5, 0xfe, 0x1c, 0xd5, 0xad, 0xf7,
+-	0x90, 0x04, 0x45, 0xfc, 0x1c, 0x72, 0x44, 0x79, 0x34, 0x0f, 0x1b, 0x59, 0x8a, 0x47, 0xc6, 0xf7,
+-	0xb6, 0xa6, 0x46, 0x2d, 0x38, 0x84, 0x9a, 0x3c, 0xbd, 0xab, 0xc5, 0xd2, 0x2c, 0x7c, 0x2f, 0xcd,
+-	0xc2, 0x67, 0x62, 0x1a, 0x8b, 0xc4, 0x34, 0xbe, 0x12, 0xd3, 0xf8, 0x49, 0x4c, 0xe3, 0xb5, 0xbc,
+-	0xf9, 0x95, 0xc6, 0xc5, 0xf5, 0xd0, 0xcd, 0x5f, 0x00, 0x00, 0x00, 0xff, 0xff, 0x66, 0x43, 0x0c,
+-	0x39, 0x5e, 0x03, 0x00, 0x00,
++	// 406 bytes of a gzipped FileDescriptorProto
++	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x93, 0xbf, 0x6e, 0xe2, 0x40,
++	0x10, 0xc6, 0x71, 0xc3, 0x9f, 0xbd, 0x03, 0xc3, 0xea, 0xe0, 0x38, 0x4e, 0x72, 0x73, 0xfd, 0x70,
++	0x82, 0xab, 0xd1, 0x09, 0xee, 0xe2, 0x44, 0x8a, 0x95, 0x08, 0x2b, 0x14, 0xe9, 0x16, 0x7b, 0x4d,
++	0x50, 0x8c, 0xd7, 0xb1, 0xd7, 0x45, 0xba, 0x3c, 0x46, 0x1e, 0x89, 0x32, 0x65, 0xca, 0xe0, 0x27,
++	0x89, 0xb0, 0xbd, 0x06, 0x1b, 0xa4, 0xed, 0x66, 0x7e, 0xe3, 0xef, 0x9b, 0x6f, 0x57, 0x6b, 0xa4,
++	0x3a, 0x96, 0xc5, 0x3c, 0x1e, 0x30, 0x17, 0xfc, 0x80, 0x71, 0x36, 0xf8, 0xb9, 0x62, 0x6c, 0xe5,
++	0xd2, 0x61, 0xd2, 0x2d, 0x23, 0x67, 0x48, 0x37, 0x3e, 0x7f, 0xce, 0x86, 0x1d, 0x67, 0x1d, 0x50,
++	0x2b, 0x20, 0xd6, 0x23, 0x0d, 0x52, 0x34, 0x7a, 0xad, 0xa1, 0x2f, 0x17, 0x07, 0x8a, 0x87, 0xa8,
++	0x3e, 0x0b, 0x28, 0xe1, 0x74, 0x61, 0xe0, 0x36, 0x88, 0x72, 0x4e, 0x9f, 0x22, 0x1a, 0xf2, 0x41,
++	0xe7, 0x88, 0x84, 0x3e, 0xf3, 0x42, 0x8a, 0x47, 0xa8, 0x76, 0x4b, 0xa2, 0x70, 0xff, 0xbd, 0x0a,
++	0x59, 0x25, 0x3e, 0xef, 0x41, 0x9a, 0x06, 0x44, 0x1a, 0xf8, 0xbf, 0x4f, 0x83, 0xff, 0xa0, 0xfa,
++	0x9c, 0x86, 0xd1, 0x26, 0x5d, 0x22, 0x4a, 0x99, 0xea, 0x37, 0xaa, 0x9a, 0x9c, 0xf9, 0x0b, 0x03,
++	0xb7, 0x20, 0x2d, 0x64, 0x8a, 0x11, 0x6a, 0xe8, 0x94, 0x2f, 0x8c, 0x2b, 0xcf, 0x61, 0xb8, 0x03,
++	0x79, 0x2d, 0x74, 0xf8, 0x18, 0x65, 0xe7, 0x99, 0xa0, 0xa6, 0xb9, 0x87, 0x06, 0xe5, 0xc4, 0x26,
++	0x9c, 0xe0, 0x2e, 0x14, 0x7a, 0xd9, 0xce, 0x7f, 0xa8, 0x7d, 0xe7, 0xdb, 0xc9, 0x1d, 0xe5, 0x16,
++	0x7d, 0x28, 0x23, 0x99, 0xcb, 0x04, 0x35, 0xf5, 0x52, 0x0a, 0xfd, 0x7c, 0x8a, 0x12, 0xce, 0x4e,
++	0xa1, 0xa3, 0xb6, 0x4e, 0xf9, 0x94, 0xb8, 0x2e, 0x63, 0xde, 0x8c, 0x79, 0xce, 0x7a, 0x85, 0xfb,
++	0x50, 0x46, 0xc2, 0xe5, 0xc7, 0x99, 0xc9, 0xe1, 0x3a, 0xd2, 0xec, 0xd9, 0x18, 0x77, 0xa1, 0xd0,
++	0xcb, 0xaf, 0x43, 0x3d, 0x78, 0x9b, 0x9c, 0xf0, 0x10, 0x7f, 0x87, 0x12, 0x11, 0x1e, 0xfd, 0xd3,
++	0x41, 0x96, 0xe2, 0x12, 0xe1, 0xc2, 0xd6, 0xd4, 0x68, 0x00, 0xa7, 0x50, 0x96, 0x67, 0x8c, 0xbe,
++	0x5e, 0x33, 0x62, 0x9b, 0x1e, 0xf1, 0xc3, 0x07, 0xc6, 0xf1, 0x37, 0x38, 0x6e, 0x85, 0xba, 0x99,
++	0xd0, 0x7c, 0xfd, 0x5f, 0xd4, 0x4a, 0xdf, 0x7d, 0x2e, 0xeb, 0x41, 0x11, 0xc8, 0x5f, 0x62, 0xed,
++	0xc6, 0x71, 0x5c, 0x46, 0x6c, 0xac, 0x42, 0x56, 0x49, 0x34, 0xd3, 0x5f, 0xdb, 0x9d, 0x56, 0x79,
++	0xdf, 0x69, 0x95, 0x97, 0x58, 0x53, 0xb6, 0xb1, 0xa6, 0xbc, 0xc5, 0x9a, 0xf2, 0x11, 0x6b, 0xca,
++	0x7d, 0x23, 0xff, 0xeb, 0x97, 0xd5, 0x44, 0x34, 0xfe, 0x0c, 0x00, 0x00, 0xff, 0xff, 0x3b, 0x3e,
++	0x14, 0xd9, 0x09, 0x04, 0x00, 0x00,
+ }
+ 
+ type FirecrackerService interface {
+@@ -66,6 +69,9 @@
+ 	UpdateBalloon(ctx context.Context, req *proto1.UpdateBalloonRequest) (*empty.Empty, error)
+ 	GetBalloonStats(ctx context.Context, req *proto1.GetBalloonStatsRequest) (*proto1.GetBalloonStatsResponse, error)
+ 	UpdateBalloonStats(ctx context.Context, req *proto1.UpdateBalloonStatsRequest) (*empty.Empty, error)
++	LoadSnapshot(ctx context.Context, req *proto1.LoadSnapshotRequest) (*proto1.LoadResponse, error)
++	CreateSnapshot(ctx context.Context, req *proto1.CreateSnapshotRequest) (*empty.Empty, error)
++	Offload(ctx context.Context, req *proto1.OffloadRequest) (*empty.Empty, error)
+ }
+ 
+ func RegisterFirecrackerService(srv *github_com_containerd_ttrpc.Server, svc FirecrackerService) {
+@@ -154,6 +160,27 @@
+ 			}
+ 			return svc.UpdateBalloonStats(ctx, &req)
+ 		},
++		"LoadSnapshot": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
++			var req proto1.LoadSnapshotRequest
++			if err := unmarshal(&req); err != nil {
++				return nil, err
++			}
++			return svc.LoadSnapshot(ctx, &req)
++		},
++		"CreateSnapshot": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
++			var req proto1.CreateSnapshotRequest
++			if err := unmarshal(&req); err != nil {
++				return nil, err
++			}
++			return svc.CreateSnapshot(ctx, &req)
++		},
++		"Offload": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
++			var req proto1.OffloadRequest
++			if err := unmarshal(&req); err != nil {
++				return nil, err
++			}
++			return svc.Offload(ctx, &req)
++		},
+ 	})
+ }
+ 
+@@ -261,4 +288,28 @@
+ 		return nil, err
+ 	}
+ 	return &resp, nil
++}
++
++func (c *firecrackerClient) LoadSnapshot(ctx context.Context, req *proto1.LoadSnapshotRequest) (*proto1.LoadResponse, error) {
++	var resp proto1.LoadResponse
++	if err := c.client.Call(ctx, "Firecracker", "LoadSnapshot", req, &resp); err != nil {
++		return nil, err
++	}
++	return &resp, nil
++}
++
++func (c *firecrackerClient) CreateSnapshot(ctx context.Context, req *proto1.CreateSnapshotRequest) (*empty.Empty, error) {
++	var resp empty.Empty
++	if err := c.client.Call(ctx, "Firecracker", "CreateSnapshot", req, &resp); err != nil {
++		return nil, err
++	}
++	return &resp, nil
++}
++
++func (c *firecrackerClient) Offload(ctx context.Context, req *proto1.OffloadRequest) (*empty.Empty, error) {
++	var resp empty.Empty
++	if err := c.client.Call(ctx, "Firecracker", "Offload", req, &resp); err != nil {
++		return nil, err
++	}
++	return &resp, nil
+ }
+diff -ur ./runtime/service.go /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/runtime/service.go
+--- ./runtime/service.go	2022-02-11 11:21:52.617311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/runtime/service.go	2022-02-25 13:37:31.111472997 +0800
+@@ -14,12 +14,15 @@
+ package main
+ 
+ import (
++	"bytes"
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
+ 	"math"
+ 	"net"
++	"net/http"
+ 	"os"
++	"os/exec"
+ 	"runtime/debug"
+ 	"strconv"
+ 	"strings"
+@@ -64,6 +67,7 @@
+ 	drivemount "github.com/firecracker-microvm/firecracker-containerd/proto/service/drivemount/ttrpc"
+ 	fccontrolTtrpc "github.com/firecracker-microvm/firecracker-containerd/proto/service/fccontrol/ttrpc"
+ 	ioproxy "github.com/firecracker-microvm/firecracker-containerd/proto/service/ioproxy/ttrpc"
++	"github.com/tv42/httpunix"
+ )
+ 
+ func init() {
+@@ -102,6 +106,13 @@
+ 	_ shim.Init           = NewService
+ )
+ 
++type loadSnapReq struct {
++	SnapshotPath         string `json:"snapshot_path"`
++	MemFilePath          string `json:"mem_file_path"`
++	SendSockAddr         string `json:"sock_file_path"`
++	EnableUserPageFaults bool   `json:"enable_user_page_faults"`
++}
++
+ // implements shimapi
+ type service struct {
+ 	taskManager   vm.TaskManager
+@@ -157,6 +168,11 @@
+ 	// fifos have stdio FIFOs containerd passed to the shim. The key is [taskID][execID].
+ 	fifos   map[string]map[string]cio.Config
+ 	fifosMu sync.Mutex
++
++	// httpControlClient is to send pause/resume/snapshot commands to the microVM
++	httpControlClient   *http.Client
++	firecrackerPid      int
++	taskDrivePathOnHost string
+ }
+ 
+ func shimOpts(shimCtx context.Context) (*shim.Opts, error) {
+@@ -494,7 +510,11 @@
+ 		s.logger.WithError(err).Error("failed to publish start VM event")
+ 	}
+ 
+-	go s.monitorVMExit()
++	// Commented out because its execution cancels the shim, and
++	// it would get executed on Offload if we leave it, killing the shim,
++	// and making snapshots impossible.
++	//go s.monitorVMExit()
++
+ 	// let all the other methods know that the VM is ready for tasks
+ 	close(s.vmReady)
+ 
+@@ -502,6 +522,8 @@
+ 	resp.MetricsFifoPath = s.machineConfig.MetricsFifo
+ 	resp.LogFifoPath = s.machineConfig.LogFifo
+ 	resp.SocketPath = s.shimDir.FirecrackerSockPath()
++	resp.FirecrackerPID = strconv.Itoa(s.firecrackerPid)
++	resp.UPFSockPath = s.shimDir.FirecrackerUPFSockPath()
+ 	if c, ok := s.jailer.(cgroupPather); ok {
+ 		resp.CgroupPath = c.CgroupPath()
+ 	}
+@@ -620,7 +642,18 @@
+ 		return err
+ 	}
+ 
++	s.createHTTPControlClient()
++
++	pid, err := s.machine.PID()
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to get PID of firecracker process")
++		return err
++	}
++
++	s.firecrackerPid = pid
++
+ 	s.logger.Info("successfully started the VM")
++
+ 	return nil
+ }
+ 
+@@ -636,8 +669,7 @@
+ 
+ // StopVM will shutdown the VMM. Unlike Shutdown, this method is exposed to containerd clients.
+ // If the VM has not been created yet and the timeout is hit waiting for it to exist, an error will be returned
+-// but the shim will continue to shutdown. Similarly if we detect that the VM is in pause state, then
+-// we are unable to communicate to the in-VM agent. In this case, we do a forceful shutdown.
++// but the shim will continue to shutdown.
+ func (s *service) StopVM(requestCtx context.Context, request *proto.StopVMRequest) (_ *empty.Empty, err error) {
+ 	defer logPanicAndDie(s.logger)
+ 	s.logger.WithFields(logrus.Fields{"timeout_seconds": request.TimeoutSeconds}).Debug("StopVM")
+@@ -647,20 +679,6 @@
+ 		timeout = time.Duration(request.TimeoutSeconds) * time.Second
+ 	}
+ 
+-	info, err := s.machine.DescribeInstanceInfo(requestCtx)
+-	if err != nil {
+-		return nil, errors.Wrapf(err, "failed to get instance info %v", info)
+-	}
+-
+-	if *info.State == models.InstanceInfoStatePaused {
+-		s.logger.Debug("Instance is in Paused state, force shutdown in progress")
+-		err = s.jailer.Stop(true)
+-		if err != nil {
+-			return nil, errors.Wrap(err, "failed to stop VM in paused State")
+-		}
+-		return &empty.Empty{}, nil
+-	}
+-
+ 	err = s.waitVMReady()
+ 	if err != nil {
+ 		return nil, err
+@@ -672,42 +690,6 @@
+ 	return &empty.Empty{}, nil
+ }
+ 
+-// ResumeVM resumes a VM
+-func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*empty.Empty, error) {
+-	defer logPanicAndDie(s.logger)
+-
+-	err := s.waitVMReady()
+-	if err != nil {
+-		s.logger.WithError(err).Error()
+-		return nil, err
+-	}
+-
+-	if err := s.machine.ResumeVM(ctx); err != nil {
+-		s.logger.WithError(err).Error()
+-		return nil, err
+-	}
+-
+-	return &empty.Empty{}, nil
+-}
+-
+-// PauseVM pauses a VM
+-func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*empty.Empty, error) {
+-	defer logPanicAndDie(s.logger)
+-
+-	err := s.waitVMReady()
+-	if err != nil {
+-		s.logger.WithError(err).Error()
+-		return nil, err
+-	}
+-
+-	if err := s.machine.PauseVM(ctx); err != nil {
+-		s.logger.WithError(err).Error()
+-		return nil, err
+-	}
+-
+-	return &empty.Empty{}, nil
+-}
+-
+ // GetVMInfo returns metadata for the VM being managed by this shim. If the VM has not been created yet, this
+ // method will wait for up to a hardcoded timeout for it to exist, returning an error if the timeout is reached.
+ func (s *service) GetVMInfo(requestCtx context.Context, request *proto.GetVMInfoRequest) (*proto.GetVMInfoResponse, error) {
+@@ -967,14 +949,6 @@
+ 		VMID:       s.vmID,
+ 	}
+ 
+-	flag, err := internal.SupportCPUTemplate()
+-	if err != nil {
+-		return nil, err
+-	}
+-	if !flag {
+-		cfg.MachineCfg.CPUTemplate = ""
+-	}
+-
+ 	logPath := s.shimDir.FirecrackerLogFifoPath()
+ 	if req.LogFifoPath != "" {
+ 		logPath = req.LogFifoPath
+@@ -1193,6 +1167,8 @@
+ 	}
+ 	rootfsMnt := request.Rootfs[0]
+ 
++	s.taskDrivePathOnHost = rootfsMnt.Source
++
+ 	err = s.containerStubHandler.Reserve(requestCtx, request.ID,
+ 		rootfsMnt.Source, vmBundleDir.RootfsPath(), "ext4", nil, s.driveMountClient, s.machine)
+ 	if err != nil {
+@@ -1725,6 +1701,8 @@
+ }
+ 
+ // monitorVMExit watches the VM and cleanup resources when it terminates.
++// Comment out because unused
++/*
+ func (s *service) monitorVMExit() {
+ 	// Block until the VM exits
+ 	if err := s.machine.Wait(s.shimCtx); err != nil && err != context.Canceled {
+@@ -1735,3 +1713,315 @@
+ 		s.logger.WithError(err).Error("failed to clean up the VM")
+ 	}
+ }
++*/
++
++func (s *service) createHTTPControlClient() {
++	u := &httpunix.Transport{
++		DialTimeout:           100 * time.Millisecond,
++		RequestTimeout:        10 * time.Second,
++		ResponseHeaderTimeout: 10 * time.Second,
++	}
++	u.RegisterLocation("firecracker", s.shimDir.FirecrackerSockPath())
++
++	t := &http.Transport{}
++	t.RegisterProtocol(httpunix.Scheme, u)
++
++	var client = http.Client{
++		Transport: t,
++	}
++
++	s.httpControlClient = &client
++}
++
++func formResumeReq() (*http.Request, error) {
++	var req *http.Request
++
++	data := map[string]string{
++		"state": "Resumed",
++	}
++	json, err := json.Marshal(data)
++	if err != nil {
++		logrus.WithError(err).Error("Failed to marshal json data")
++		return nil, err
++	}
++
++	req, err = http.NewRequest("PATCH", "http+unix://firecracker/vm", bytes.NewBuffer(json))
++	if err != nil {
++		logrus.WithError(err).Error("Failed to create new HTTP request in formResumeReq")
++		return nil, err
++	}
++	req.Header.Add("accept", "application/json")
++	req.Header.Add("Content-Type", "application/json")
++
++	return req, nil
++}
++
++func formPauseReq() (*http.Request, error) {
++	var req *http.Request
++
++	data := map[string]string{
++		"state": "Paused",
++	}
++	json, err := json.Marshal(data)
++	if err != nil {
++		logrus.WithError(err).Error("Failed to marshal json data")
++		return nil, err
++	}
++
++	req, err = http.NewRequest("PATCH", "http+unix://firecracker/vm", bytes.NewBuffer(json))
++	if err != nil {
++		logrus.WithError(err).Error("Failed to create new HTTP request in formPauseReq")
++		return nil, err
++	}
++	req.Header.Add("accept", "application/json")
++	req.Header.Add("Content-Type", "application/json")
++
++	return req, nil
++}
++
++func formLoadSnapReq(snapshotPath, memPath, sendSockAddr string, isUpf bool) (*http.Request, error) {
++	var req *http.Request
++
++	data := loadSnapReq{
++		SnapshotPath:         snapshotPath,
++		MemFilePath:          memPath,
++		SendSockAddr:         sendSockAddr,
++		EnableUserPageFaults: isUpf,
++	}
++
++	json, err := json.Marshal(data)
++	if err != nil {
++		logrus.WithError(err).Error("Failed to marshal json data")
++		return nil, err
++	}
++
++	req, err = http.NewRequest("PUT", "http+unix://firecracker/snapshot/load", bytes.NewBuffer(json))
++	if err != nil {
++		logrus.WithError(err).Error("Failed to create new HTTP request in formLoadSnapReq")
++		return nil, err
++	}
++	req.Header.Add("accept", "application/json")
++	req.Header.Add("Content-Type", "application/json")
++
++	return req, nil
++}
++
++func formCreateSnapReq(snapshotPath, memPath string) (*http.Request, error) {
++	var req *http.Request
++
++	data := map[string]string{
++		"snapshot_type": "Full",
++		"snapshot_path": snapshotPath,
++		"mem_file_path": memPath,
++	}
++	json, err := json.Marshal(data)
++	if err != nil {
++		logrus.WithError(err).Error("Failed to marshal json data")
++		return nil, err
++	}
++
++	req, err = http.NewRequest("PUT", "http+unix://firecracker/snapshot/create", bytes.NewBuffer(json))
++	if err != nil {
++		logrus.WithError(err).Error("Failed to create new HTTP request in formCreateSnapReq")
++		return nil, err
++	}
++	req.Header.Add("accept", "application/json")
++	req.Header.Add("Content-Type", "application/json")
++
++	return req, nil
++}
++
++func (s *service) startFirecrackerProcess() error {
++	firecPath, err := exec.LookPath("firecracker")
++	if err != nil {
++		logrus.WithError(err).Error("failed to look up firecracker binary")
++		return err
++	}
++
++	// TODO: Remove hardcoding and make a parameter
++	logFilePath := fmt.Sprintf("/tmp/log_%s_after.logs", s.vmID)
++	if err := os.RemoveAll(logFilePath); err != nil {
++		s.logger.WithError(err).Errorf("Failed to delete %s", logFilePath)
++		return err
++	}
++	if _, err := os.OpenFile(logFilePath, os.O_RDONLY|os.O_CREATE, 0600); err != nil {
++		s.logger.WithError(err).Errorf("Failed to create %s", logFilePath)
++		return err
++	}
++
++	args := []string{
++		"--api-sock", s.shimDir.FirecrackerSockPath(),
++		"--log-path", logFilePath,
++		"--level", s.config.DebugHelper.GetFirecrackerLogLevel(),
++		"--show-level",
++		"--show-log-origin",
++	}
++
++	firecrackerCmd := exec.Command(firecPath, args...)
++	firecrackerCmd.Dir = s.shimDir.RootPath()
++
++	if err := firecrackerCmd.Start(); err != nil {
++		logrus.WithError(err).Error("Failed to start firecracker process")
++	}
++
++	go firecrackerCmd.Wait()
++
++	s.firecrackerPid = firecrackerCmd.Process.Pid
++
++	return nil
++}
++
++func (s *service) dialFirecrackerSocket() error {
++	for {
++		var d net.Dialer
++		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
++		defer cancel()
++
++		c, err := d.DialContext(ctx, "unix", s.shimDir.FirecrackerSockPath())
++		if err != nil {
++			if ctx.Err() != nil {
++				s.logger.WithError(ctx.Err()).Error("timed out while waiting for firecracker socket")
++				return ctx.Err()
++			}
++
++			time.Sleep(1 * time.Millisecond)
++			continue
++		}
++
++		c.Close()
++
++		break
++	}
++
++	return nil
++}
++
++// PauseVM Pauses a VM
++func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*empty.Empty, error) {
++	pauseReq, err := formPauseReq()
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to create pause vm request")
++		return nil, err
++	}
++
++	err = s.waitVMReady()
++	if err != nil {
++		return nil, err
++	}
++
++	resp, err := s.httpControlClient.Do(pauseReq)
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to send pause VM request")
++		return nil, err
++	}
++	if !strings.Contains(resp.Status, "204") {
++		s.logger.WithError(err).Error("Failed to pause VM")
++		return nil, errors.New("Failed to pause VM")
++	}
++
++	return &empty.Empty{}, nil
++}
++
++// ResumeVM Resumes a VM
++func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*empty.Empty, error) {
++	resumeReq, err := formResumeReq()
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to create resume vm request")
++		return nil, err
++	}
++
++	resp, err := s.httpControlClient.Do(resumeReq)
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to send resume VM request")
++		return nil, err
++	}
++	if !strings.Contains(resp.Status, "204") {
++		s.logger.WithError(err).Error("Failed to resume VM")
++		return nil, errors.New("Failed to resume VM")
++	}
++	return &empty.Empty{}, nil
++}
++
++// LoadSnapshot Loads a VM from a snapshot
++func (s *service) LoadSnapshot(ctx context.Context, req *proto.LoadSnapshotRequest) (*proto.LoadResponse, error) {
++	if err := s.startFirecrackerProcess(); err != nil {
++		s.logger.WithError(err).Error("startFirecrackerProcess returned an error")
++		return nil, err
++	}
++
++	if err := s.dialFirecrackerSocket(); err != nil {
++		s.logger.WithError(err).Error("Failed to wait for firecracker socket")
++	}
++	s.createHTTPControlClient()
++
++	sendSockAddr := s.shimDir.FirecrackerUPFSockPath()
++	if !req.EnableUserPF {
++		sendSockAddr = "dummy"
++	}
++
++	loadSnapReq, err := formLoadSnapReq(req.SnapshotFilePath, req.MemFilePath, sendSockAddr, req.EnableUserPF)
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to create load snapshot request")
++		return nil, err
++	}
++
++	resp, err := s.httpControlClient.Do(loadSnapReq)
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to send load snapshot request")
++		return nil, err
++	}
++	if !strings.Contains(resp.Status, "204") {
++		s.logger.WithError(err).Error("Failed to load VM from snapshot")
++		s.logger.WithError(err).Errorf("Status of request: %s", resp.Status)
++		return nil, errors.New("Failed to load VM from snapshot")
++	}
++
++	return &proto.LoadResponse{FirecrackerPID: strconv.Itoa(s.firecrackerPid)}, nil
++}
++
++// CreateSnapshot Creates a snapshot of a VM
++func (s *service) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotRequest) (*empty.Empty, error) {
++	createSnapReq, err := formCreateSnapReq(req.SnapshotFilePath, req.MemFilePath)
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to create make snapshot request")
++		return nil, err
++	}
++
++	resp, err := s.httpControlClient.Do(createSnapReq)
++	if err != nil {
++		s.logger.WithError(err).Error("Failed to send make snapshot request")
++		return nil, err
++	}
++	if !strings.Contains(resp.Status, "204") {
++		s.logger.WithError(err).Error("Failed to make snapshot of VM")
++		return nil, errors.New("Failed to make snapshot of VM")
++	}
++
++	return &empty.Empty{}, nil
++}
++
++// Offload Shuts down a VM and deletes the corresponding firecracker socket
++// and vsock. All of the other resources will persist
++func (s *service) Offload(ctx context.Context, req *proto.OffloadRequest) (*empty.Empty, error) {
++	if err := syscall.Kill(s.firecrackerPid, 9); err != nil {
++		s.logger.WithError(err).Error("Failed to kill firecracker process")
++		return nil, err
++	}
++
++	if err := os.RemoveAll(s.shimDir.FirecrackerSockPath()); err != nil {
++		s.logger.WithError(err).Error("Failed to delete firecracker socket")
++		return nil, err
++	}
++
++	if err := os.RemoveAll(s.shimDir.FirecrackerVSockPath()); err != nil {
++		s.logger.WithError(err).Error("Failed to delete firecracker vsock")
++		return nil, err
++	}
++
++	if err := os.RemoveAll(s.shimDir.FirecrackerUPFSockPath()); err != nil {
++		s.logger.WithError(err).Error("Failed to delete firecracker UPF socket")
++		return nil, err
++	}
++
++	return &empty.Empty{}, nil
++}
+diff -ur ./runtime/service_integ_test.go /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/runtime/service_integ_test.go
+--- ./runtime/service_integ_test.go	2022-02-11 11:21:52.617311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/runtime/service_integ_test.go	2022-02-25 13:37:31.111472997 +0800
+@@ -191,9 +191,10 @@
+ 
+ 		cfg, err := config.LoadConfig("")
+ 		require.NoError(t, err, "failed to load config")
+-		varRunFCContents, err := ioutil.ReadDir(cfg.ShimBaseDir)
+-		require.NoError(t, err, `failed to list directory "%s"`, cfg.ShimBaseDir)
+-		require.Len(t, varRunFCContents, 0, "expect %s to be empty", cfg.ShimBaseDir)
++		namespaceShimBaseDir := filepath.Join(cfg.ShimBaseDir, namespaces.Default)
++		varRunFCContents, err := ioutil.ReadDir(namespaceShimBaseDir)
++		require.NoError(t, err, `failed to list directory "%s"`, namespaceShimBaseDir)
++		require.Len(t, varRunFCContents, 0, "expect %s to be cleared after shims shutdown", namespaceShimBaseDir)
+ 	case err = <-exitEventErrCh:
+ 		require.Fail(t, "unexpected error", "unexpectedly received on task exit error channel: %s", err.Error())
+ 	case <-testCtx.Done():
+@@ -344,11 +345,9 @@
+ 				// which makes the agent resource-hoggy than its production build
+ 				// So the default VM size (128MB) is too small.
+ 				MachineCfg: &proto.FirecrackerMachineConfiguration{MemSizeMib: 1024},
+-				// CreateVM's default timeout is 20 seconds and it cannot be
+-				// disabled.
+-				// However because this test starts multiple VMs in parallel,
+-				// some of them may not start within the default timeout.
+-				TimeoutSeconds: 300,
++				// Because this test starts multiple VMs in parallel, some of them may not start within
++				// the default timeout (20 seconds).
++				TimeoutSeconds: 60,
+ 			}
+ 
+ 			resp, err := fcClient.CreateVM(ctx, req)
+@@ -380,12 +379,11 @@
+ 			require.NoError(t, err, "failed to get VM Info for VM %d", vmID)
+ 			require.Equal(t, vmInfoResp.VMID, strconv.Itoa(vmID))
+ 
+-			nspVMid := defaultNamespace + "#" + strconv.Itoa(vmID)
+ 			cfg, err := config.LoadConfig("")
+ 			require.NoError(t, err, "failed to load config")
+-			require.Equal(t, vmInfoResp.SocketPath, filepath.Join(cfg.ShimBaseDir, nspVMid, "firecracker.sock"))
+-			require.Equal(t, vmInfoResp.LogFifoPath, filepath.Join(cfg.ShimBaseDir, nspVMid, "fc-logs.fifo"))
+-			require.Equal(t, vmInfoResp.MetricsFifoPath, filepath.Join(cfg.ShimBaseDir, nspVMid, "fc-metrics.fifo"))
++			require.Equal(t, vmInfoResp.SocketPath, filepath.Join(cfg.ShimBaseDir, defaultNamespace, strconv.Itoa(vmID), "firecracker.sock"))
++			require.Equal(t, vmInfoResp.LogFifoPath, filepath.Join(cfg.ShimBaseDir, defaultNamespace, strconv.Itoa(vmID), "fc-logs.fifo"))
++			require.Equal(t, vmInfoResp.MetricsFifoPath, filepath.Join(cfg.ShimBaseDir, defaultNamespace, strconv.Itoa(vmID), "fc-metrics.fifo"))
+ 			require.Equal(t, resp.CgroupPath, vmInfoResp.CgroupPath)
+ 
+ 			// just verify that updating the metadata doesn't return an error, a separate test case is needed
+@@ -869,7 +867,7 @@
+ 	require.NoError(t, err, "failed to load config")
+ 
+ 	if len(vmID) != 0 {
+-		shimPath := fmt.Sprintf("%s/default#%s/%s/%s", cfg.ShimBaseDir, vmID, vmID, containerName)
++		shimPath := fmt.Sprintf("%s/default/%s/%s", cfg.ShimBaseDir, vmID, containerName)
+ 		_, err = os.Stat(shimPath)
+ 		require.True(t, os.IsNotExist(err))
+ 	}
+@@ -891,7 +889,7 @@
+ 	require.True(t, os.IsNotExist(err))
+ 
+ 	if len(vmID) != 0 {
+-		shimPath := fmt.Sprintf("%s/default#%s/%s/%s", cfg.ShimBaseDir, vmID, vmID, containerName)
++		shimPath := fmt.Sprintf("%s/default/%s/%s", cfg.ShimBaseDir, vmID, containerName)
+ 		_, err = os.Stat(shimPath)
+ 		require.True(t, os.IsNotExist(err))
+ 	}
+@@ -1009,7 +1007,7 @@
+ 		},
+ 		{
+ 			VMPath:         "/mnt",
+-			FilesystemType: "ext4",
++			FilesystemType: "ext3",
+ 			// don't specify "ro" to validate it's automatically set via "IsWritable: false"
+ 			VMMountOptions: []string{"relatime"},
+ 			ContainerPath:  "/bar",
+@@ -1539,7 +1537,6 @@
+ 		stopFunc        func(ctx context.Context, fcClient fccontrol.FirecrackerService, req proto.CreateVMRequest)
+ 		withStopVM      bool
+ 	}{
+-
+ 		{
+ 			name:       "Successful",
+ 			withStopVM: true,
+@@ -1629,22 +1626,6 @@
+ 				}
+ 			},
+ 		},
+-
+-		// Test that StopVM returns success if the VM is in paused state, instead of hanging forever.
+-		// VM is force shutdown in this case, so we expect no Error or hang.
+-		{
+-			name:       "PauseStop",
+-			withStopVM: true,
+-
+-			createVMRequest: proto.CreateVMRequest{},
+-			stopFunc: func(ctx context.Context, fcClient fccontrol.FirecrackerService, req proto.CreateVMRequest) {
+-				_, err = fcClient.PauseVM(ctx, &proto.PauseVMRequest{VMID: req.VMID})
+-				require.Equal(status.Code(err), codes.OK)
+-
+-				_, err = fcClient.StopVM(ctx, &proto.StopVMRequest{VMID: req.VMID})
+-				require.NoError(err)
+-			},
+-		},
+ 	}
+ 
+ 	fcClient, err := newFCControlClient(containerdSockPath)
+@@ -2241,6 +2222,10 @@
+ 		// Ensure the response fields are populated correctly
+ 		assert.Equal(t, request.VMID, resp.VMID)
+ 
++		// Currently StopVM doesn't work when the VM is paused, since StopVM calls its in-VM agent.
++		_, err = fcClient.ResumeVM(ctx, &proto.ResumeVMRequest{VMID: request.VMID})
++		require.Equal(t, status.Code(err), codes.OK)
++
+ 		_, err = fcClient.StopVM(ctx, &proto.StopVMRequest{VMID: request.VMID})
+ 		require.Equal(t, status.Code(err), codes.OK)
+ 	}
+Only in .: snapshot.diff
+Only in .: _submodules
+Only in /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/tools/docker: Dockerfile.firecracker-builder
+diff -ur ./tools/docker/entrypoint.sh /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/tools/docker/entrypoint.sh
+--- ./tools/docker/entrypoint.sh	2022-02-11 11:21:52.617311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/tools/docker/entrypoint.sh	2022-02-25 13:37:31.111472997 +0800
+@@ -12,9 +12,8 @@
+ fi
+ 
+ cat > /etc/containerd/snapshotter/devmapper.toml <<EOF
+-version = 2
+ [plugins]
+-  [plugins."io.containerd.snapshotter.v1.devmapper"]
++  [plugins.devmapper]
+     pool_name = "${pool_name}"
+     base_image_size = "1024MB"
+ EOF
+Only in ./tools/image-builder: builder_stamp
+Only in ./tools/image-builder: debootstrap_stamp
+Only in ./tools/image-builder: files_common_stamp
+Only in ./tools/image-builder/files_debootstrap/etc: resolv.conf
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: apt-daily.timer
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: apt-daily-upgrade.timer
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: firecracker.target.wants
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: getty-static.service
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: rom-dev.mount
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: rom.mount
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: rom-overlay.mount
+Only in ./tools/image-builder/files_debootstrap/etc/systemd/system: systemd-timesyncd.service
+Only in ./tools/image-builder: files_debootstrap_stamp
+Only in ./tools/image-builder: files_ephemeral
+Only in ./tools/image-builder: files_ephemeral_stamp
+diff -ur ./tools/image-builder/Makefile /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/tools/image-builder/Makefile
+--- ./tools/image-builder/Makefile	2022-02-11 11:21:52.617311692 +0800
++++ /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4/tools/image-builder/Makefile	2022-02-25 13:37:31.111472997 +0800
+@@ -17,8 +17,6 @@
+ IMAGE_DIRS := /dev /bin /etc /etc/init.d /tmp /var /run /proc /sys /container/rootfs /agent /rom /overlay
+ DIRS       := $(foreach dir,$(IMAGE_DIRS),"$(WORKDIR)$(dir)")
+ DEBMIRROR  ?= http://deb.debian.org/debian
+-ROOTFS_CACHE_VOLUME_NAME ?= rootfscache
+-
+ 
+ export DOCKER_IMAGE_TAG?=latest
+ 
+@@ -58,7 +56,7 @@
+ 	debootstrap \
+ 		--variant=minbase \
+ 		--include=udev,systemd,systemd-sysv,procps,libseccomp2,haveged \
+-		bookworm \
++		buster \
+ 		"$(WORKDIR)" $(DEBMIRROR)
+ 	rm -rf "$(WORKDIR)/var/cache/apt/archives" \
+ 	       "$(WORKDIR)/usr/share/doc" \
+@@ -105,7 +103,7 @@
+ 	docker run --rm \
+ 		--security-opt=apparmor=unconfined \
+ 		--volume $(CURDIR):/src \
+-		--volume $(ROOTFS_CACHE_VOLUME_NAME):/src/tmp \
++		--volume /src/tmp \
+ 		--cap-add=sys_admin \
+ 		--cap-add=sys_chroot \
+ 		--env=DEBMIRROR \
+Only in ./tools/image-builder: rootfs.img
+Only in ./tools/image-builder: rootfs-no-agent.img
+Only in ./tools/image-builder: rootfs-slow-boot.img
+Only in ./tools/image-builder: rootfs-slow-reboot.img
+Only in ./tools/image-builder: tmp
+Only in ./tools: runc-builder-stamp
+Only in /home/daisy/go/pkg/mod/github.com/ease-lab/firecracker-containerd@v0.0.0-20210618165033-6af02db30bc4: .travis.yml
