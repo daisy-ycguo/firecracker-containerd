@@ -59,7 +59,9 @@ type Config struct {
 	ShimBaseDir  string       `json:"shim_base_dir"`
 	JailerConfig JailerConfig `json:"jailer"`
 
-	DebugHelper *debug.Helper `json:"-"`
+	DebugHelper      *debug.Helper `json:"-"`
+	SnapshotMemFile  string        `json:"snapshot_mem_file"`
+	SnapshotMetaFile string        `json:"snapshot_meta_file"`
 }
 
 // JailerConfig houses a set of configurable values for jailing
