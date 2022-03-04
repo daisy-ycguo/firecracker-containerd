@@ -1,0 +1,50 @@
+# disabled_plugins = ["cri"]
+version = 2
+root = "/var/lib/firecracker-containerd/containerd"
+state = "/run/firecracker-containerd"
+[grpc]
+  address = "/run/firecracker-containerd/containerd.sock"
+[plugins]
+ [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+      snapshotter = "devmapper"
+      default_runtime_name = "runc"
+      no_pivot = false
+      disable_snapshot_annotations = false
+      discard_unpacked_layers = false
+      [plugins."io.containerd.grpc.v1.cri".containerd.default_runtime]
+        runtime_type = "io.containerd.runc.v2"
+        runtime_engine = ""
+        runtime_root = ""
+        privileged_without_host_devices = false
+        base_runtime_spec = ""
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+          runtime_type = "io.containerd.runc.v2"
+          runtime_engine = ""
+          runtime_root = ""
+          privileged_without_host_devices = false
+          base_runtime_spec = ""
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.firecracker]
+          runtime_type = "io.containerd.aws.firecracker"
+          runtime_engine = ""
+          runtime_root = ""
+          privileged_without_host_devices = false
+          base_runtime_spec = ""
+  [plugins."io.containerd.snapshotter.v1.devmapper"]
+    pool_name = "fc-dev-thinpool"
+    base_image_size = "10GB"
+    root_path = "/var/lib/firecracker-containerd/snapshotter/devmapper"
+  [plugins."io.containerd.grpc.v1.cri".registry]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
+      [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
+        endpoint = ["https://registry-1.docker.io"]
+    [plugins."io.containerd.grpc.v1.cri".registry.auths]
+      [plugins."io.containerd.grpc.v1.cri".registry.auths."docker.io"]
+        auth = "eGlucmFud2FuZzowNjExMzhYZg=="
+        # username = "xinranwang"
+        # password = "mypasswd"
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."172.16.5.22:5000"]
+      endpoint = ["http://172.16.5.22:5000"]
+[debug]
+  level = "info"

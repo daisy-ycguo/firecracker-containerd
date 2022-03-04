@@ -17,12 +17,14 @@ FICD_DM_VOLUME_GROUP="$FICD_DM_VOLUME_GROUP"
 
 # The tmp/devmapper/ directory will be created on this project's
 # root directory.
-DIR=$(dirname $BASH_SOURCE)/../tmp/devmapper
+# DIR=$(dirname $BASH_SOURCE)/../tmp/devmapper
+DIR=/var/lib/firecracker-containerd/snapshotter/devmapper
 
 set -euo pipefail
 
 subcommand="$1"
-name="$2"
+#name="$2"
+name=fc-dev-thinpool
 
 if [ -z "$name" ]; then
     exit 0
