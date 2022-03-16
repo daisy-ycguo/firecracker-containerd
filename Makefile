@@ -130,7 +130,8 @@ image: $(RUNC_BIN) agent-in-docker
 	cp $(RUNC_BIN) tools/image-builder/files_ephemeral/usr/local/bin
 	cp agent/agent tools/image-builder/files_ephemeral/usr/local/bin
 	touch tools/image-builder/files_ephemeral
-	$(MAKE) -C tools/image-builder all-in-docker
+	$(MAKE) -C tools/image-builder all
+#	$(MAKE) -C tools/image-builder all-in-docker
 
 test: $(TEST_SUBDIRS)
 	go test ./... $(EXTRAGOARGS)

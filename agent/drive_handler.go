@@ -14,10 +14,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
+
 	"path/filepath"
 	"strings"
 	"time"
@@ -163,6 +166,36 @@ func isStubDrive(d drive) bool {
 	defer f.Close()
 
 	return internal.IsStubDrive(f)
+}
+
+// return the command output?
+func (dh driveHandler) ExecCmd(ctx context.Context, req *drivemount.ExecCmdRequest) (*drivemount.ExecCmdResponse, error) {
+	var resp drivemount.ExecCmdResponse
+	logger := log.G(ctx)
+	//logger.Debugf("%+v", req.String())
+	logger = logger.WithField("Command", req.Cmd)
+	log.G(ctx).Info("enter exec cmd")
+	fmt.Println("enter exec cmd")
+
+	var out bytes.Buffer
+	cmd_str := strings.Fields(req.Cmd)
+
+	fmt.Println(cmd_str)
+	cmd := exec.Command(cmd_str[0], cmd_str[1:]...)
+	cmd.Stdout = &out
+	err := cmd.Run()
+
+	log.G(ctx).Info("Command output", out.String())
+	logger = logger.WithField("Command output", out.String())
+	logger.Info(out.String())
+
+	if err == nil {
+		resp.Outstr = out.String()
+		return &resp, nil
+	}
+
+	logger.Error("failed to execute.")
+	return nil, errors.Errorf("failed to execute %q", cmd_str)
 }
 
 func (dh driveHandler) MountDrive(ctx context.Context, req *drivemount.MountDriveRequest) (*empty.Empty, error) {

@@ -468,7 +468,7 @@ func (s *service) waitVMReady() error {
 	}
 }
 
-// createVMCommon will attempt to create the VM as specified in the provided request, but only on the first request
+// createVMFromSnapshot will attempt to create the VM as specified in the provided request, but only on the first request
 // received. Any subsequent requests will be ignored and get an AlreadyExists error response.
 func (s *service) createVMFromSnapshot(requestCtx context.Context, request *proto.CreateVMRequest) (*proto.CreateVMResponse, error) {
 	defer logPanicAndDie(s.logger)
@@ -517,19 +517,19 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		return nil, errors.Wrapf(err, "failed to build VM configuration")
 	}
 
-	// opts := []firecracker.Opt{}
+	opts := []firecracker.Opt{}
 
 	if v, ok := s.config.DebugHelper.GetFirecrackerSDKLogLevel(); ok {
 		logger := log.G(s.shimCtx)
 		logger.Logger.SetLevel(v)
-		// opts = append(opts, firecracker.WithLogger(logger))
+		opts = append(opts, firecracker.WithLogger(logger))
 	}
 	relVSockPath, err := s.jailer.JailPath().FirecrackerVSockRelPath()
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get relative path to firecracker vsock")
 	}
 
-	_, err = s.jailer.BuildJailedMachine(s.config, s.machineConfig, s.vmID)
+	jailedOpts, err := s.jailer.BuildJailedMachine(s.config, s.machineConfig, s.vmID)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to build jailed machine options")
 	}
@@ -542,14 +542,23 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create balloon device")
 		}
-		_, err = s.buildBalloonDeviceOpt(balloon)
+		balloonOpts, err := s.buildBalloonDeviceOpt(balloon)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create balloon device options")
 		}
-		//opts = append(opts, balloonOpts...)
+		opts = append(opts, balloonOpts...)
 	}
 
-	//opts = append(opts, jailedOpts...)
+	opts = append(opts, jailedOpts...)
+
+	// In the event that a noop jailer is used, we will pass in the shim context
+	// and have the SDK construct a new machine using that context. Otherwise, a
+	// custom process runner will be provided via options which will stomp over
+	// the shim context that was provided here.
+	s.machine, err = firecracker.NewMachine(s.shimCtx, *s.machineConfig, opts...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create new machine instance")
+	}
 
 	snapshotReq.MemFilePath = s.config.SnapshotMemFile
 	snapshotReq.SnapshotFilePath = s.config.SnapshotMetaFile
@@ -580,13 +589,15 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 
 	s.createHTTPControlClient()
 
-	pid, err := s.machine.PID()
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to get PID of firecracker process")
-		return nil, err
-	}
+	s.logger.Info("machine=", s.machine)
 
-	s.firecrackerPid = pid
+	// pid, err := s.machine.PID()
+	// if err != nil {
+	// 	s.logger.WithError(err).Error("Failed to get PID of firecracker process")
+	// 	return nil, err
+	// }
+
+	//s.firecrackerPid = snapshotResp.FirecrackerPID
 	s.logger.Info("successfully start VM from snapshot")
 
 	// creating the VM succeeded, setup monitors and publish events to celebrate
@@ -1337,8 +1348,41 @@ func (s *service) deleteFIFOs(taskID, execID string) error {
 	return nil
 }
 
+func (s *service) loadTaskFromSnapshot(requestCtx context.Context, request *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
+	// defer logPanicAndDie(s.logger)
+	// var (
+	// 	err error
+	// )
+
+	// snapshotReq, err := formLoadSnapReq(s.config.SnapshotMetaFile, s.config.SnapshotMemFile, "dummy", false)
+	// if err != nil {
+	// 	s.logger.WithError(err).Error("Failed to create load snapshot request")
+	// 	return nil, err
+	// }
+
+	// resp, err := s.httpControlClient.Do(snapshotReq)
+	// if err != nil {
+	// 	s.logger.WithError(err).Error("Failed to send load snapshot request")
+	// 	return nil, err
+	// }
+	// if !strings.Contains(resp.Status, "204") {
+
+	// 	s.logger.WithError(err).Error("Failed to load VM from snapshot")
+	// 	s.logger.WithError(err).Errorf("Status of request: %s", resp.Status)
+	// 	s.logger.WithError(err).Errorf("Error: %s", string(debug.Stack()))
+	// 	//return nil, errors.New("Failed to load VM from snapshot")
+	// 	return &taskAPI.CreateTaskResponse{Pid: 100}, nil
+	// }
+	//TODO add logic to get Pid from Agent connection
+	return &taskAPI.CreateTaskResponse{Pid: 100}, nil
+}
+
 func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
 	s.logger.Info("!!!! into runtime Create")
+
+	var (
+		resp *taskAPI.CreateTaskResponse
+	)
 
 	logger := s.logger.WithField("task_id", request.ID)
 	defer logPanicAndDie(logger)
@@ -1425,11 +1469,23 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 	// requirement of patching stub drives
 	request.Rootfs = nil
 
-	resp, err := s.taskManager.CreateTask(requestCtx, request, s.agentClient, ioConnectorSet)
-	if err != nil {
-		err = errors.Wrap(err, "failed to create task")
-		logger.WithError(err).Error()
-		return nil, err
+	_, err = os.Stat(s.config.SnapshotMemFile)
+	//snapshot file exists,load from snapshot
+	if err == nil {
+		resp, err = s.loadTaskFromSnapshot(requestCtx, request)
+		if err != nil {
+			err = errors.Wrap(err, "failed to load task from snapshot")
+			logger.WithError(err).Error()
+			return nil, err
+		}
+	} else //snapshot file not exists, create a new task
+	{
+		resp, err = s.taskManager.CreateTask(requestCtx, request, s.agentClient, ioConnectorSet)
+		if err != nil {
+			err = errors.Wrap(err, "failed to create task")
+			logger.WithError(err).Error()
+			return nil, err
+		}
 	}
 
 	err = s.addFIFOs(request.ID, taskExecID, cio.Config{
