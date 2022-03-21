@@ -15,9 +15,13 @@ package vm
 
 import (
 	"context"
+	"fmt"
+	"io/ioutil"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/containerd/containerd/cio"
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
@@ -42,7 +46,7 @@ type TaskManager interface {
 	// IOConnectorSet.
 	// If the TaskManager was shutdown by a previous call to ShutdownIfEmpty, an
 	// error will be returned.
-	CreateTask(context.Context, *taskAPI.CreateTaskRequest, taskAPI.TaskService, IOProxy) (*taskAPI.CreateTaskResponse, error)
+	CreateTask(context.Context, *taskAPI.CreateTaskRequest, taskAPI.TaskService, IOProxy, *cio.FIFOSet) (*taskAPI.CreateTaskResponse, error)
 
 	// DeleteProcess removes a task or exec being managed from the TaskManager.
 	// It deletes the process from the provided TaskService using the provided
@@ -68,14 +72,24 @@ type TaskManager interface {
 	// IsProxyOpen returns true if the given task or exec has an IO proxy
 	// which hasn't been closed.
 	IsProxyOpen(string, string) (bool, error)
+
+	IsRestored() bool
+
+	GetRestoredContainer() (string, int)
+
+	//Invoke before creating a task to check if it's a restored one
+	CheckRestored() bool
+
+	FindFifoset(string, string) (*cio.FIFOSet, error)
 }
 
 // NewTaskManager initializes a new TaskManager
 func NewTaskManager(shimCtx context.Context, logger *logrus.Entry) TaskManager {
 	return &taskManager{
-		tasks:   make(map[string]map[string]*vmProc),
-		shimCtx: shimCtx,
-		logger:  logger,
+		tasks:      make(map[string]map[string]*vmProc),
+		shimCtx:    shimCtx,
+		logger:     logger,
+		isRestored: false,
 	}
 }
 
@@ -85,8 +99,11 @@ type taskManager struct {
 	tasks      map[string]map[string]*vmProc
 	isShutdown bool
 
-	shimCtx context.Context
-	logger  *logrus.Entry
+	shimCtx    context.Context
+	logger     *logrus.Entry
+	isRestored bool
+	tempTaskID string
+	tempPid    int
 }
 
 type vmProc struct {
@@ -104,6 +121,58 @@ type vmProc struct {
 
 	// proxy is used to copy the exec's stdio.
 	proxy IOProxy
+	// fifoset is used to store the fifo information
+	fifoset *cio.FIFOSet
+}
+
+func (m *taskManager) CheckRestored() bool {
+	//fmt.Println("into CheckRestored")
+	t, p := m.getContainerPid()
+	//fmt.Printf("get t=%s,p=%d \n", t, p)
+	if p > 0 {
+		m.tempTaskID = t
+		m.tempPid = p
+		m.isRestored = true
+		return true
+	}
+	return false
+}
+
+func (m *taskManager) IsRestored() bool {
+	return m.isRestored
+}
+
+func (m *taskManager) GetRestoredContainer() (string, int) {
+	if m.isRestored {
+		return m.tempTaskID, m.tempPid
+	}
+	return "", -1
+}
+
+func (m *taskManager) getContainerPid() (string, int) {
+	//fmt.Println("into getContainerPid")
+	path := "/container"
+	subfolders, _ := ioutil.ReadDir(path)
+	for _, file := range subfolders {
+		if file.Name() != "rootfs" && file.IsDir() {
+			idpath := fmt.Sprintf("%s/%s/init.pid", path, file.Name())
+			body, err := ioutil.ReadFile(idpath)
+			if err == nil {
+				//TODO check the process exist
+				content := string(body)
+				id, err := strconv.Atoi(content)
+				if err == nil {
+					//fmt.Printf("return: %s,%d\n", file.Name(), id)
+					return file.Name(), id
+				} else {
+					fmt.Printf("Atoi error:%s\n", err)
+				}
+			} else {
+				fmt.Printf("read id file error is %s\n", err)
+			}
+		}
+	}
+	return "", -1
 }
 
 func (m *taskManager) newProc(taskID, execID string) (*vmProc, error) {
@@ -177,16 +246,18 @@ func (m *taskManager) CreateTask(
 	req *taskAPI.CreateTaskRequest,
 	taskService taskAPI.TaskService,
 	ioProxy IOProxy,
+	fifoset *cio.FIFOSet,
 ) (_ *taskAPI.CreateTaskResponse, err error) {
 	taskID := req.ID
 	execID := "" // ExecID of initial process in task is empty string by containerd convention
 
+	var initDone, copyDone <-chan error
+
+	//make proc entry
 	proc, err := m.newProc(taskID, execID)
 	if err != nil {
 		return nil, err
 	}
-	proc.proxy = ioProxy
-
 	defer func() {
 		if err != nil {
 			proc.cancel()
@@ -194,27 +265,50 @@ func (m *taskManager) CreateTask(
 		}
 	}()
 
+	proc.logger.Debugf("!!! into internal vm create task, taskID=%s, execID=%s", taskID, execID)
+	if m.IsRestored() {
+		//restored case
+		proc.logger.Debugf("!!! into internal vm create task - restored")
+		oldproc, ok := m.tasks[m.tempTaskID][execID]
+		if !ok {
+			return nil, errors.Errorf("cannot fild template exec %q from task %q", execID, taskID)
+		}
+		oldproc.proxy.Close()
+	}
+	proc.logger.Debugf("!!! into internal vm create task - create io proxy")
+	proc.proxy = ioProxy
+	proc.fifoset = fifoset
 	// Begin initializing stdio, but don't block on the initialization so we can send the Create
 	// call (which will allow the stdio initialization to complete).
-	initDone, copyDone := ioProxy.start(proc)
+	initDone, copyDone = ioProxy.start(proc)
 	proc.ioCopyDone = copyDone
 
-	createResp, err := taskService.Create(reqCtx, req)
-	if err != nil {
-		return nil, err
+	var createResp *taskAPI.CreateTaskResponse
+	if !m.IsRestored() {
+		proc.logger.Debugf("!!! start to call taskService.Create")
+		createResp, err = taskService.Create(reqCtx, req)
+		if err != nil {
+			proc.logger.Debugf("!!! error 1 return from vm create task")
+			return nil, err
+		}
+	} else {
+		createResp = &taskAPI.CreateTaskResponse{Pid: uint32(m.tempPid)}
 	}
 
 	// make sure stdio was initialized successfully
 	err = <-initDone
 	if err != nil {
+		proc.logger.Debugf("!!! error 2 return from vm create task")
 		return nil, err
 	}
 
 	proc.logger.WithField("pid_in_vm", createResp.Pid).Info("successfully created task")
 
+	proc.logger.Debugf("!!! into internal vm create task - start monitors")
 	go m.monitorExit(proc, taskService)
 	go monitorIO(copyDone, proc)
 
+	proc.logger.Debugf("!!! return from vm create task")
 	return createResp, nil
 }
 
@@ -288,8 +382,14 @@ func (m *taskManager) DeleteProcess(
 }
 
 func (m *taskManager) monitorExit(proc *vmProc, taskService taskAPI.TaskService) {
+	var taskid string
+	if m.isRestored {
+		taskid = m.tempTaskID
+	} else {
+		taskid = proc.taskID
+	}
 	waitResp, waitErr := taskService.Wait(proc.ctx, &taskAPI.WaitRequest{
-		ID:     proc.taskID,
+		ID:     taskid,
 		ExecID: proc.execID,
 	})
 
@@ -321,6 +421,15 @@ func (m *taskManager) IsProxyOpen(taskID, execID string) (bool, error) {
 	}
 
 	return proc.proxy.IsOpen(), nil
+}
+
+func (m *taskManager) FindFifoset(taskID string, execID string) (*cio.FIFOSet, error) {
+	proc, err := m.findProc(taskID, execID)
+	if err == nil {
+		return proc.fifoset, nil
+	} else {
+		return nil, err
+	}
 }
 
 // findProc returns a vmProc if exists. The function itself doesn't lock the manager's mutex.

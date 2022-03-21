@@ -1,4 +1,4 @@
-// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License"). You may
 // not use this file except in compliance with the License. A copy of the
@@ -75,6 +75,7 @@ func init() {
 }
 
 const (
+	templateTaskID   = "count69"
 	defaultVsockPort = 10789
 	minVsockIOPort   = uint32(11000)
 
@@ -115,6 +116,8 @@ type loadSnapReq struct {
 
 // implements shimapi
 type service struct {
+	isQuickStart bool
+	//taskID        string
 	taskManager   vm.TaskManager
 	eventExchange *exchange.Exchange
 	namespace     string
@@ -156,6 +159,7 @@ type service struct {
 	containerStubHandler     *StubDriveHandler
 	driveMountStubs          []MountableStubDrive
 	exitAfterAllTasksDeleted bool // exit the VM and shim when all tasks are deleted
+	rpcClient                *ttrpc.Client
 
 	cleanupErr  error
 	cleanupOnce sync.Once
@@ -338,7 +342,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	logrus.SetOutput(logFifo)
 
 	log := log.G(shimCtx).WithField("task_id", opts.ID)
-	log.Debug("StartShim")
+	log.Info("StartShim, record timestamp!!!")
 
 	// If we are running a shim start routine, we can safely assume our current working
 	// directory is the bundle directory
@@ -468,6 +472,18 @@ func (s *service) waitVMReady() error {
 	}
 }
 
+func (s *service) execCMD(requestCtx context.Context, cmdstr string) (string, error) {
+	s.logger.Debug("!!!! into execCMD")
+	req := drivemount.ExecCmdRequest{
+		Cmd: cmdstr,
+	}
+	resp, err := s.driveMountClient.ExecCmd(requestCtx, &req)
+	if err != nil {
+		return "", err
+	}
+	return resp.Outstr, nil
+}
+
 // createVMFromSnapshot will attempt to create the VM as specified in the provided request, but only on the first request
 // received. Any subsequent requests will be ignored and get an AlreadyExists error response.
 func (s *service) createVMFromSnapshot(requestCtx context.Context, request *proto.CreateVMRequest) (*proto.CreateVMResponse, error) {
@@ -497,7 +513,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		return nil, status.Error(codes.AlreadyExists, "shim cannot create VM more than once")
 	}
 
-	s.logger.Info("creating new VM")
+	s.logger.Debug("creating new VM")
 	s.jailer, err = newJailer(s.shimCtx, s.logger, dir.RootPath(), s, request)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create jailer")
@@ -569,17 +585,17 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		s.logger.WithError(err).Fatalf("Failed to LoadSnapshot")
 	}
 
-	s.logger.Info("calling agent")
+	s.logger.Debug("calling agent")
 	conn, err := vm.VSockDial(requestCtx, s.logger, relVSockPath, defaultVsockPort)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to dial the VM over vsock")
 	}
 
-	rpcClient := ttrpc.NewClient(conn, ttrpc.WithOnClose(func() { _ = conn.Close() }))
-	s.agentClient = taskAPI.NewTaskClient(rpcClient)
-	s.eventBridgeClient = eventbridge.NewGetterClient(rpcClient)
-	s.driveMountClient = drivemount.NewDriveMounterClient(rpcClient)
-	s.ioProxyClient = ioproxy.NewIOProxyClient(rpcClient)
+	s.rpcClient = ttrpc.NewClient(conn, ttrpc.WithOnClose(func() { _ = conn.Close() }))
+	s.agentClient = taskAPI.NewTaskClient(s.rpcClient)
+	s.eventBridgeClient = eventbridge.NewGetterClient(s.rpcClient)
+	s.driveMountClient = drivemount.NewDriveMounterClient(s.rpcClient)
+	s.ioProxyClient = ioproxy.NewIOProxyClient(s.rpcClient)
 	s.exitAfterAllTasksDeleted = request.ExitAfterAllTasksDeleted
 
 	err = s.mountDrives(requestCtx)
@@ -589,16 +605,10 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 
 	s.createHTTPControlClient()
 
-	s.logger.Info("machine=", s.machine)
-
-	// pid, err := s.machine.PID()
-	// if err != nil {
-	// 	s.logger.WithError(err).Error("Failed to get PID of firecracker process")
-	// 	return nil, err
-	// }
+	s.logger.Debug("machine=", s.machine)
 
 	//s.firecrackerPid = snapshotResp.FirecrackerPID
-	s.logger.Info("successfully start VM from snapshot")
+	s.logger.Debug("successfully start VM from snapshot")
 
 	// creating the VM succeeded, setup monitors and publish events to celebrate
 	err = s.publishVMStart()
@@ -623,14 +633,17 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 func (s *service) CreateVM(requestCtx context.Context, request *proto.CreateVMRequest) (*proto.CreateVMResponse, error) {
 	//defer logPanicAndDie(s.logger)
 
-	s.logger.Info("!!!! into CreateVM")
+	s.logger.Info("!!!! into CreateVM. record timestamp!!!")
 
+	// first time to check if load from snapshot
 	_, err := os.Stat(s.config.SnapshotMemFile)
 	if err == nil {
-		s.logger.Info("!!!! into snapshot CreateVM")
+		s.isQuickStart = true
+		s.logger.Debug("!!!! into snapshot CreateVM")
 		return s.createVMFromSnapshot(requestCtx, request)
 	} else {
-		s.logger.Info("!!!! into triditional CreateVM")
+		s.isQuickStart = false
+		s.logger.Debug("!!!! into triditional CreateVM")
 		return s.createVMCommon(requestCtx, request)
 	}
 }
@@ -719,7 +732,7 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		return err
 	}
 
-	s.logger.Info("creating new VM")
+	s.logger.Debug("creating new VM")
 	s.jailer, err = newJailer(s.shimCtx, s.logger, dir.RootPath(), s, request)
 	if err != nil {
 		return errors.Wrap(err, "failed to create jailer")
@@ -786,7 +799,7 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		return errors.Wrapf(err, "failed to start the VM")
 	}
 
-	s.logger.Info("calling agent")
+	s.logger.Debug("calling agent")
 	conn, err := vm.VSockDial(requestCtx, s.logger, relVSockPath, defaultVsockPort)
 	if err != nil {
 		return errors.Wrapf(err, "failed to dial the VM over vsock")
@@ -833,7 +846,7 @@ func (s *service) mountDrives(requestCtx context.Context) error {
 // but the shim will continue to shutdown. Similarly if we detect that the VM is in pause state, then
 // we are unable to communicate to the in-VM agent. In this case, we do a forceful shutdown.
 func (s *service) StopVM(requestCtx context.Context, request *proto.StopVMRequest) (_ *empty.Empty, err error) {
-	s.logger.Info("!!!! into runtime StopVM")
+	s.logger.Debug("!!!! into runtime StopVM")
 	defer logPanicAndDie(s.logger)
 	s.logger.WithFields(logrus.Fields{"timeout_seconds": request.TimeoutSeconds}).Debug("StopVM")
 
@@ -869,7 +882,7 @@ func (s *service) StopVM(requestCtx context.Context, request *proto.StopVMReques
 
 // ResumeVM resumes a VM
 func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*empty.Empty, error) {
-	s.logger.Info("!!!! into runtime ResumeVM")
+	s.logger.Debug("!!!! into runtime ResumeVM")
 	defer logPanicAndDie(s.logger)
 
 	err := s.waitVMReady()
@@ -888,7 +901,7 @@ func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*em
 
 // PauseVM pauses a VM
 func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*empty.Empty, error) {
-	s.logger.Info("!!!! into runtime PauseVM")
+	s.logger.Debug("!!!! into runtime PauseVM")
 	defer logPanicAndDie(s.logger)
 
 	err := s.waitVMReady()
@@ -908,7 +921,7 @@ func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*empt
 // GetVMInfo returns metadata for the VM being managed by this shim. If the VM has not been created yet, this
 // method will wait for up to a hardcoded timeout for it to exist, returning an error if the timeout is reached.
 func (s *service) GetVMInfo(requestCtx context.Context, request *proto.GetVMInfoRequest) (*proto.GetVMInfoResponse, error) {
-	s.logger.Info("!!!! into runtime GetVMInfo")
+	s.logger.Debug("!!!! into runtime GetVMInfo")
 	defer logPanicAndDie(s.logger)
 
 	err := s.waitVMReady()
@@ -942,7 +955,7 @@ func (s *service) SetVMMetadata(requestCtx context.Context, request *proto.SetVM
 		return nil, err
 	}
 
-	s.logger.Info("setting VM metadata")
+	s.logger.Debug("setting VM metadata")
 	jayson := json.RawMessage(request.Metadata)
 	if err := s.machine.SetMetadata(requestCtx, jayson); err != nil {
 		err = errors.Wrap(err, "failed to set VM metadata")
@@ -966,7 +979,7 @@ func (s *service) UpdateVMMetadata(requestCtx context.Context, request *proto.Up
 		return nil, err
 	}
 
-	s.logger.Info("updating VM metadata")
+	s.logger.Debug("updating VM metadata")
 	jayson := json.RawMessage(request.Metadata)
 	if err := s.machine.UpdateMetadata(requestCtx, jayson); err != nil {
 		err = errors.Wrap(err, "failed to update VM metadata")
@@ -990,7 +1003,7 @@ func (s *service) GetVMMetadata(requestCtx context.Context, request *proto.GetVM
 		return nil, err
 	}
 
-	s.logger.Info("Get VM metadata")
+	s.logger.Debug("Get VM metadata")
 	var metadata json.RawMessage
 	if err := s.machine.GetMetadata(requestCtx, &metadata); err != nil {
 		err = errors.Wrap(err, "failed to get VM metadata")
@@ -1035,7 +1048,7 @@ func (s *service) GetBalloonConfig(requestCtx context.Context, req *proto.GetBal
 		return nil, err
 	}
 
-	s.logger.Info("Getting configuration for the balloon device")
+	s.logger.Debug("Getting configuration for the balloon device")
 	balloon, err := s.machine.GetBalloonConfig(requestCtx)
 	if err != nil {
 		return nil, errors.Errorf("Fail to get balloon configuration. Please check if you have successfully created a balloon device")
@@ -1078,7 +1091,7 @@ func (s *service) GetBalloonStats(requestCtx context.Context, req *proto.GetBall
 		return nil, err
 	}
 
-	s.logger.Info("Getting statistics for the balloon device")
+	s.logger.Debug("Getting statistics for the balloon device")
 	balloonStats, err := s.machine.GetBalloonStats(requestCtx)
 	if err != nil {
 		err = errors.Wrap(err, "failed to get balloon statistics")
@@ -1110,7 +1123,7 @@ func (s *service) GetBalloonStats(requestCtx context.Context, req *proto.GetBall
 		TotalMemory:        balloonStats.TotalMemory,
 	}
 
-	s.logger.Info("GetBalloonStatsResponse: ", resp)
+	s.logger.Debug("GetBalloonStatsResponse: ", resp)
 
 	return resp, nil
 }
@@ -1125,7 +1138,7 @@ func (s *service) UpdateBalloonStats(requestCtx context.Context, req *proto.Upda
 		return nil, err
 	}
 
-	s.logger.Info("updating balloon device statistics interval")
+	s.logger.Debug("updating balloon device statistics interval")
 	if err := s.machine.UpdateBalloonStats(requestCtx, req.StatsPollingIntervals); err != nil {
 		err = errors.Wrap(err, "failed to update balloon device statistics interval")
 		s.logger.WithError(err).Error()
@@ -1348,37 +1361,8 @@ func (s *service) deleteFIFOs(taskID, execID string) error {
 	return nil
 }
 
-func (s *service) loadTaskFromSnapshot(requestCtx context.Context, request *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
-	// defer logPanicAndDie(s.logger)
-	// var (
-	// 	err error
-	// )
-
-	// snapshotReq, err := formLoadSnapReq(s.config.SnapshotMetaFile, s.config.SnapshotMemFile, "dummy", false)
-	// if err != nil {
-	// 	s.logger.WithError(err).Error("Failed to create load snapshot request")
-	// 	return nil, err
-	// }
-
-	// resp, err := s.httpControlClient.Do(snapshotReq)
-	// if err != nil {
-	// 	s.logger.WithError(err).Error("Failed to send load snapshot request")
-	// 	return nil, err
-	// }
-	// if !strings.Contains(resp.Status, "204") {
-
-	// 	s.logger.WithError(err).Error("Failed to load VM from snapshot")
-	// 	s.logger.WithError(err).Errorf("Status of request: %s", resp.Status)
-	// 	s.logger.WithError(err).Errorf("Error: %s", string(debug.Stack()))
-	// 	//return nil, errors.New("Failed to load VM from snapshot")
-	// 	return &taskAPI.CreateTaskResponse{Pid: 100}, nil
-	// }
-	//TODO add logic to get Pid from Agent connection
-	return &taskAPI.CreateTaskResponse{Pid: 100}, nil
-}
-
 func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
-	s.logger.Info("!!!! into runtime Create")
+	s.logger.Debug("!!!! into runtime Create")
 
 	var (
 		resp *taskAPI.CreateTaskResponse
@@ -1469,25 +1453,26 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 	// requirement of patching stub drives
 	request.Rootfs = nil
 
-	_, err = os.Stat(s.config.SnapshotMemFile)
+	//_, err = os.Stat(s.config.SnapshotMemFile)
 	//snapshot file exists,load from snapshot
-	if err == nil {
-		resp, err = s.loadTaskFromSnapshot(requestCtx, request)
-		if err != nil {
-			err = errors.Wrap(err, "failed to load task from snapshot")
-			logger.WithError(err).Error()
-			return nil, err
-		}
-	} else //snapshot file not exists, create a new task
-	{
-		resp, err = s.taskManager.CreateTask(requestCtx, request, s.agentClient, ioConnectorSet)
-		if err != nil {
-			err = errors.Wrap(err, "failed to create task")
-			logger.WithError(err).Error()
-			return nil, err
-		}
+	// if s.isQuickStart {
+	// 	resp, err = s.taskManager.CreateTask(requestCtx, request, s.agentClient, ioConnectorSet, true)
+	// 	if err != nil {
+	// 		err = errors.Wrap(err, "failed to call agent.Create")
+	// 		logger.WithError(err).Error()
+	// 		return nil, err
+	// 	}
+	// } else {
+	//snapshot file not exists, create a new task
+	resp, err = s.taskManager.CreateTask(requestCtx, request, s.agentClient, ioConnectorSet, nil)
+	if err != nil {
+		err = errors.Wrap(err, "failed to create task")
+		logger.WithError(err).Error()
+		return nil, err
 	}
+	// }
 
+	s.logger.Debug("!!!! returning from create task")
 	err = s.addFIFOs(request.ID, taskExecID, cio.Config{
 		Stdin:  request.Stdin,
 		Stdout: request.Stdout,
@@ -1497,17 +1482,39 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 		return nil, err
 	}
 
+	// if s.isQuickStart {
+	// 	err = s.attachNewProxy(requestCtx, logger, request.ID, taskExecID, s.fifos[request.ID][taskExecID])
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+
+	s.logger.Debug("!!!! the end of Create method")
 	return resp, nil
 }
 
 func (s *service) Start(requestCtx context.Context, req *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
+	s.logger.Debug("start!!!")
+
+	var (
+		resp *taskAPI.StartResponse
+		err  error
+	)
 
 	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Debug("start")
-	resp, err := s.agentClient.Start(requestCtx, req)
+	//_, err := os.Stat(s.config.SnapshotMemFile)
+	//snapshot file exists,load from snapshot
+	if s.isQuickStart {
+		//TODO need to get PID from agent
+		resp = &taskAPI.StartResponse{Pid: 796}
+	} else {
+		resp, err = s.agentClient.Start(requestCtx, req)
+	}
 	if err != nil {
 		return nil, err
 	}
+	s.logger.Debug("the end of start!!!")
 
 	return resp, nil
 }
@@ -1605,6 +1612,7 @@ func (s *service) Exec(requestCtx context.Context, req *taskAPI.ExecProcessReque
 // ResizePty of a process
 func (s *service) ResizePty(requestCtx context.Context, req *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
+	s.logger.Debug("ResizePty")
 
 	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Debug("resize_pty")
 	resp, err := s.agentClient.ResizePty(requestCtx, req)
@@ -1620,9 +1628,10 @@ func (s *service) State(requestCtx context.Context, req *taskAPI.StateRequest) (
 	defer logPanicAndDie(log.G(requestCtx))
 
 	logger := log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID})
-	logger.Debug("state")
+	logger.Debug("state!!!")
 	resp, err := s.agentClient.State(requestCtx, req)
 	if err != nil {
+		logger.Debug("agent.state error")
 		return nil, err
 	}
 
@@ -1636,17 +1645,22 @@ func (s *service) State(requestCtx context.Context, req *taskAPI.StateRequest) (
 		logger.Debug("task is no longer running")
 		return resp, nil
 	}
+	logger.Debug("task is running!!!")
 
 	resp.Stdin = host.Stdin
 	resp.Stdout = host.Stdout
 	resp.Stderr = host.Stderr
 
+	logger.Debug("is proxy client running ???")
 	state, err := s.ioProxyClient.State(requestCtx, &ioproxy.StateRequest{ID: req.ID, ExecID: req.ExecID})
 	if err != nil {
+		logger.Debug("proxy client is no longer running")
 		return nil, err
 	}
 	if state.IsOpen {
 		logger.Debug("proxy is still alive")
+		logger.Debug("status is", resp.Status)
+		s.logger.Info("the end of state!!! Record timestamp")
 		return resp, nil
 	}
 
@@ -1656,6 +1670,7 @@ func (s *service) State(requestCtx context.Context, req *taskAPI.StateRequest) (
 		return nil, err
 	}
 
+	s.logger.Info("the end of state!!! Record timestamp")
 	return resp, nil
 }
 
@@ -1762,7 +1777,7 @@ func (s *service) CloseIO(requestCtx context.Context, req *taskAPI.CloseIOReques
 func (s *service) Checkpoint(requestCtx context.Context, req *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 
-	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "path": req.Path}).Info("checkpoint")
+	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "path": req.Path}).Debug("checkpoint")
 	resp, err := s.agentClient.Checkpoint(requestCtx, req)
 	if err != nil {
 		return nil, err
@@ -1813,7 +1828,7 @@ func (s *service) shutdown(
 	timeout time.Duration,
 	req *taskAPI.ShutdownRequest,
 ) error {
-	s.logger.Info("stopping the VM")
+	s.logger.Debug("stopping the VM")
 
 	go func() {
 		s.shutdownLoop(requestCtx, timeout, req)
@@ -1930,7 +1945,7 @@ func (s *service) Wait(requestCtx context.Context, req *taskAPI.WaitRequest) (*t
 }
 
 func (s *service) Cleanup(requestCtx context.Context) (*taskAPI.DeleteResponse, error) {
-	s.logger.Info("!!!! into runtime Cleanup")
+	s.logger.Debug("!!!! into runtime Cleanup")
 	defer logPanicAndDie(log.G(requestCtx))
 
 	err := s.waitVMReady()
@@ -2123,7 +2138,7 @@ func (s *service) dialFirecrackerSocket() error {
 func (s *service) LoadSnapshot(ctx context.Context, req *proto.LoadSnapshotRequest) (*proto.LoadResponse, error) {
 	defer logPanicAndDie(s.logger)
 
-	s.logger.Info("!!!! into LoadSnapshot")
+	s.logger.Debug("!!!! into LoadSnapshot")
 
 	if err := s.startFirecrackerProcess(); err != nil {
 		s.logger.WithError(err).Error("startFirecrackerProcess returned an error")

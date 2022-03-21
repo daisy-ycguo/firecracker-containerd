@@ -1,4 +1,4 @@
-// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License"). You may
 // not use this file except in compliance with the License. A copy of the
@@ -34,6 +34,12 @@ var _ ioproxy.IOProxyService = &ioProxyHandler{}
 
 // State returns whether the given exec's IOProxy is still open or not.
 func (ps *ioProxyHandler) State(_ context.Context, req *ioproxy.StateRequest) (*ioproxy.StateResponse, error) {
+	// var tID string
+	// if ps.isRestored {
+	// 	tID = ps.taskID
+	// } else {
+	// 	tID = req.ID
+	// }
 	open, err := ps.taskManager.IsProxyOpen(req.ID, req.ExecID)
 	if err != nil {
 		return nil, err
@@ -43,7 +49,16 @@ func (ps *ioProxyHandler) State(_ context.Context, req *ioproxy.StateRequest) (*
 
 // Attach a new IOProxy to the given exec.
 func (ps *ioProxyHandler) Attach(ctx context.Context, req *ioproxy.AttachRequest) (*empty.Empty, error) {
-	state, err := ps.runcService.State(ctx, &task.StateRequest{ID: req.ID, ExecID: req.ExecID})
+
+	var tID string
+	if ps.taskManager.IsRestored() {
+		t, _ := ps.taskManager.GetRestoredContainer()
+		tID = t
+	} else {
+		tID = req.ID
+	}
+
+	state, err := ps.runcService.State(ctx, &task.StateRequest{ID: tID, ExecID: req.ExecID})
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +76,7 @@ func (ps *ioProxyHandler) Attach(ctx context.Context, req *ioproxy.AttachRequest
 		)
 	}
 
-	err = ps.taskManager.AttachIO(ctx, req.ID, req.ExecID, proxy)
+	err = ps.taskManager.AttachIO(ctx, tID, req.ExecID, proxy)
 	if err != nil {
 		return nil, err
 	}

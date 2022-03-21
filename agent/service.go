@@ -1,4 +1,4 @@
-// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License"). You may
 // not use this file except in compliance with the License. A copy of the
@@ -105,10 +105,9 @@ func NewTaskService(
 		taskManager:  vm.NewTaskManager(shimCtx, log.G(shimCtx)),
 		runcService:  runcService,
 		execCleanups: make(map[string][]func() error),
-
-		publisher:  publisher,
-		shimCtx:    shimCtx,
-		shimCancel: shimCancel,
+		publisher:    publisher,
+		shimCtx:      shimCtx,
+		shimCancel:   shimCancel,
 	}, nil
 }
 
@@ -154,14 +153,21 @@ func (ts *TaskService) Create(requestCtx context.Context, req *taskAPI.CreateTas
 	defer logPanicAndDie(log.G(requestCtx))
 	taskID := req.ID
 	execID := "" // the exec ID of the initial process in a task is an empty string by containerd convention
+
+	logger := log.G(requestCtx).WithField("TaskID", taskID).WithField("ExecID", execID)
+	logger.Infof("!!! into agent create, taskID=%s, execID=%s", taskID, execID)
+
+	if ts.taskManager.CheckRestored() {
+		logger.Info("checkrestored is true")
+	} else {
+		logger.Info("common create process")
+	}
+
 	// this is technically validated earlier by containerd, but is added here too for extra safety
 	taskExecID, err := TaskExecID(taskID, execID)
 	if err != nil {
 		return nil, errors.Wrap(err, "invalid task and/or exec ID")
 	}
-
-	logger := log.G(requestCtx).WithField("TaskID", taskID).WithField("ExecID", execID)
-	logger.Info("create")
 
 	defer func() {
 		if err != nil {
@@ -211,16 +217,23 @@ func (ts *TaskService) Create(requestCtx context.Context, req *taskAPI.CreateTas
 	}
 
 	var ioConnectorSet vm.IOProxy
+	var fifoSet *cio.FIFOSet
 
 	if vm.IsAgentOnlyIO(req.Stdout, logger) {
 		ioConnectorSet = vm.NewNullIOProxy()
 	} else {
-		// Override the incoming stdio FIFOs, which have paths from the host that we can't use
-		fifoSet, err := cio.NewFIFOSetInDir(bundleDir.RootPath(), taskExecID, req.Terminal)
-		if err != nil {
-			err = errors.Wrap(err, "failed to open stdio FIFOs")
-			logger.WithError(err).Error()
-			return nil, err
+		if ts.taskManager.IsRestored() {
+			taskid, _ := ts.taskManager.GetRestoredContainer()
+			fifoSet, err = ts.taskManager.FindFifoset(taskid, execID)
+		}
+		if fifoSet == nil {
+			// Override the incoming stdio FIFOs, which have paths from the host that we can't use
+			fifoSet, err = cio.NewFIFOSetInDir(bundleDir.RootPath(), taskExecID, req.Terminal)
+			if err != nil {
+				err = errors.Wrap(err, "failed to open stdio FIFOs")
+				logger.WithError(err).Error()
+				return nil, err
+			}
 		}
 
 		var stdinConnectorPair *vm.IOConnectorPair
@@ -253,12 +266,12 @@ func (ts *TaskService) Create(requestCtx context.Context, req *taskAPI.CreateTas
 		ioConnectorSet = vm.NewIOConnectorProxy(stdinConnectorPair, stdoutConnectorPair, stderrConnectorPair)
 	}
 
-	resp, err := ts.taskManager.CreateTask(requestCtx, req, ts.runcService, ioConnectorSet)
+	resp, err := ts.taskManager.CreateTask(requestCtx, req, ts.runcService, ioConnectorSet, fifoSet)
 	if err != nil {
 		return nil, err
 	}
 
-	logger.WithField("pid", resp.Pid).Debugf("create succeeded")
+	logger.WithField("pid", resp.Pid).Info("agent output: agent.create succeeded")
 	return resp, nil
 }
 
@@ -267,6 +280,10 @@ func (ts *TaskService) State(requestCtx context.Context, req *taskAPI.StateReque
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "exec_id": req.ExecID}).Debug("state")
 
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 	resp, err := ts.runcService.State(requestCtx, req)
 	if err != nil {
 		log.G(requestCtx).WithError(err).Error("state failed")
@@ -287,6 +304,13 @@ func (ts *TaskService) Start(requestCtx context.Context, req *taskAPI.StartReque
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "exec_id": req.ExecID}).Debug("start")
 
+	if ts.taskManager.IsRestored() {
+		_, p := ts.taskManager.GetRestoredContainer()
+		resp := &taskAPI.StartResponse{Pid: uint32(p)}
+		log.G(requestCtx).WithField("pid", resp.Pid).Debug("start(restore) succeeded")
+		return resp, nil
+	}
+
 	resp, err := ts.runcService.Start(requestCtx, req)
 	if err != nil {
 		log.G(requestCtx).WithError(err).Error("start failed")
@@ -302,6 +326,10 @@ func (ts *TaskService) Delete(requestCtx context.Context, req *taskAPI.DeleteReq
 	defer logPanicAndDie(log.G(requestCtx))
 	taskID := req.ID
 	execID := req.ExecID
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		taskID = t
+	}
 	// this is technically validated earlier by containerd, but is added here too for extra safety
 	taskExecID, err := TaskExecID(taskID, execID)
 	if err != nil {
@@ -332,6 +360,11 @@ func (ts *TaskService) Pids(requestCtx context.Context, req *taskAPI.PidsRequest
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithField("id", req.ID).Debug("pids")
 
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
+
 	resp, err := ts.runcService.Pids(requestCtx, req)
 	if err != nil {
 		log.G(requestCtx).WithError(err).Error("pids failed")
@@ -346,6 +379,10 @@ func (ts *TaskService) Pids(requestCtx context.Context, req *taskAPI.PidsRequest
 func (ts *TaskService) Pause(requestCtx context.Context, req *taskAPI.PauseRequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithField("id", req.ID).Debug("pause")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Pause(requestCtx, req)
 	if err != nil {
@@ -361,6 +398,10 @@ func (ts *TaskService) Pause(requestCtx context.Context, req *taskAPI.PauseReque
 func (ts *TaskService) Resume(requestCtx context.Context, req *taskAPI.ResumeRequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithField("id", req.ID).Debug("resume")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Resume(requestCtx, req)
 	if err != nil {
@@ -376,6 +417,10 @@ func (ts *TaskService) Resume(requestCtx context.Context, req *taskAPI.ResumeReq
 func (ts *TaskService) Checkpoint(requestCtx context.Context, req *taskAPI.CheckpointTaskRequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "path": req.Path}).Info("checkpoint")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Checkpoint(requestCtx, req)
 	if err != nil {
@@ -391,6 +436,10 @@ func (ts *TaskService) Checkpoint(requestCtx context.Context, req *taskAPI.Check
 func (ts *TaskService) Kill(requestCtx context.Context, req *taskAPI.KillRequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "exec_id": req.ExecID}).Debug("kill")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Kill(requestCtx, req)
 	if err != nil {
@@ -408,6 +457,10 @@ func (ts *TaskService) Exec(requestCtx context.Context, req *taskAPI.ExecProcess
 
 	taskID := req.ID
 	execID := req.ExecID
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		taskID = t
+	}
 	// this is technically validated earlier by containerd, but is added here too for extra safety
 	taskExecID, err := TaskExecID(taskID, execID)
 	if err != nil {
@@ -502,6 +555,10 @@ func (ts *TaskService) Exec(requestCtx context.Context, req *taskAPI.ExecProcess
 func (ts *TaskService) ResizePty(requestCtx context.Context, req *taskAPI.ResizePtyRequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "exec_id": req.ExecID}).Debug("resize_pty")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.ResizePty(requestCtx, req)
 	if err != nil {
@@ -517,6 +574,10 @@ func (ts *TaskService) ResizePty(requestCtx context.Context, req *taskAPI.Resize
 func (ts *TaskService) CloseIO(requestCtx context.Context, req *taskAPI.CloseIORequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "exec_id": req.ExecID}).Debug("close_io")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.CloseIO(requestCtx, req)
 	if err != nil {
@@ -532,6 +593,10 @@ func (ts *TaskService) CloseIO(requestCtx context.Context, req *taskAPI.CloseIOR
 func (ts *TaskService) Update(requestCtx context.Context, req *taskAPI.UpdateTaskRequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithField("id", req.ID).Debug("update")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Update(requestCtx, req)
 	if err != nil {
@@ -547,6 +612,10 @@ func (ts *TaskService) Update(requestCtx context.Context, req *taskAPI.UpdateTas
 func (ts *TaskService) Wait(requestCtx context.Context, req *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "exec_id": req.ExecID}).Debug("wait")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Wait(requestCtx, req)
 	if err != nil {
@@ -562,6 +631,10 @@ func (ts *TaskService) Wait(requestCtx context.Context, req *taskAPI.WaitRequest
 func (ts *TaskService) Stats(requestCtx context.Context, req *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithField("id", req.ID).Debug("stats")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Stats(requestCtx, req)
 	if err != nil {
@@ -577,6 +650,10 @@ func (ts *TaskService) Stats(requestCtx context.Context, req *taskAPI.StatsReque
 func (ts *TaskService) Connect(requestCtx context.Context, req *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithField("id", req.ID).Debug("connect")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	resp, err := ts.runcService.Connect(requestCtx, req)
 	if err != nil {
@@ -596,6 +673,10 @@ func (ts *TaskService) Connect(requestCtx context.Context, req *taskAPI.ConnectR
 func (ts *TaskService) Shutdown(requestCtx context.Context, req *taskAPI.ShutdownRequest) (*types.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	log.G(requestCtx).WithFields(logrus.Fields{"id": req.ID, "now": req.Now}).Debug("shutdown")
+	if ts.taskManager.IsRestored() {
+		t, _ := ts.taskManager.GetRestoredContainer()
+		req.ID = t
+	}
 
 	// shimCancel will result in the runc shim to be canceled in addition to unblocking agent's
 	// main func, which will allow it to exit gracefully.

@@ -173,7 +173,7 @@ func (dh driveHandler) ExecCmd(ctx context.Context, req *drivemount.ExecCmdReque
 	var resp drivemount.ExecCmdResponse
 	logger := log.G(ctx)
 	//logger.Debugf("%+v", req.String())
-	logger = logger.WithField("Command", req.Cmd)
+	//logger = logger.WithField("Command", req.Cmd)
 	log.G(ctx).Info("enter exec cmd")
 	fmt.Println("enter exec cmd")
 
@@ -185,12 +185,13 @@ func (dh driveHandler) ExecCmd(ctx context.Context, req *drivemount.ExecCmdReque
 	cmd.Stdout = &out
 	err := cmd.Run()
 
-	log.G(ctx).Info("Command output", out.String())
-	logger = logger.WithField("Command output", out.String())
-	logger.Info(out.String())
+	//log.G(ctx).Info("Command output", out.String())
+	//logger = logger.WithField("Command output", out.String())
+	//logger.Info(out.String())
 
 	if err == nil {
 		resp.Outstr = out.String()
+		log.G(ctx).Info("Success exec cmd")
 		return &resp, nil
 	}
 

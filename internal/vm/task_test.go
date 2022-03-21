@@ -335,7 +335,7 @@ func TestTaskManager_CreateExecDeleteTask(t *testing.T) {
 
 	// Create a task, simulate data on stdin, stdout, stderr
 	createReqCtx, createReqCancel := context.WithCancel(shimCtx)
-	_, err := tm.CreateTask(createReqCtx, &taskAPI.CreateTaskRequest{ID: mockTask.TaskID}, ts, mockTask.IOConnectorSet)
+	_, err := tm.CreateTask(createReqCtx, &taskAPI.CreateTaskRequest{ID: mockTask.TaskID}, ts, mockTask.IOConnectorSet, nil)
 	require.NoError(t, err, "create task failed")
 	createReqCancel()
 
@@ -423,7 +423,7 @@ func TestTaskManager_CreateExecDeleteTask(t *testing.T) {
 
 	tooLateTask := newMockProc("too.late", "", mockIOConnector, mockIOConnector, mockIOConnector)
 	createReqCtx, createReqCancel = context.WithCancel(shimCtx)
-	_, err = tm.CreateTask(createReqCtx, &taskAPI.CreateTaskRequest{ID: tooLateTask.TaskID}, ts, tooLateTask.IOConnectorSet)
+	_, err = tm.CreateTask(createReqCtx, &taskAPI.CreateTaskRequest{ID: tooLateTask.TaskID}, ts, tooLateTask.IOConnectorSet, nil)
 	require.Error(t, err, "create unexpectedly succeeded after shutdown")
 	createReqCancel()
 
@@ -496,7 +496,7 @@ func TestTaskManager_IOCreateFails(t *testing.T) {
 	ts.SetWaitCh(mockTask.TaskID, mockTask.ExecID, mockTask.WaitCh)
 
 	createReqCtx, createReqCancel := context.WithCancel(shimCtx)
-	_, err := tm.CreateTask(createReqCtx, &taskAPI.CreateTaskRequest{ID: mockTask.TaskID}, ts, mockTask.IOConnectorSet)
+	_, err := tm.CreateTask(createReqCtx, &taskAPI.CreateTaskRequest{ID: mockTask.TaskID}, ts, mockTask.IOConnectorSet, nil)
 	require.Error(t, err, "create task unexpectedly succeeded")
 	createReqCancel()
 

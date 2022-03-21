@@ -58,16 +58,24 @@ func main() {
 		port    int
 		debug   bool
 		version bool
+		dtest   bool
 	)
 
 	flag.IntVar(&port, "port", defaultPort, "Vsock port to listen to")
 	flag.BoolVar(&debug, "debug", false, "Turn on debug mode")
 	flag.BoolVar(&version, "version", false, "Show the version")
+	flag.BoolVar(&dtest, "test", false, "Show the version")
 	flag.Parse()
 
 	if debug {
 		logrus.SetLevel(logrus.DebugLevel)
 	}
+
+	// if dtest {
+	// 	t, p := getContainerPid()
+	// 	fmt.Printf("task:%s, pid:%d\n", t, p)
+	// 	return
+	// }
 
 	if version {
 		showVersion()
@@ -99,6 +107,10 @@ func main() {
 
 	eventExchange := &event.ExchangeCloser{Exchange: exchange.NewExchange()}
 	eventbridge.RegisterGetterService(server, eventbridge.NewGetterService(shimCtx, eventExchange))
+
+	// Check if the agent is a restored one
+	// check the disk
+	//taskID, pid := getContainerPid()
 
 	taskService, err := NewTaskService(shimCtx, shimCancel, eventExchange)
 	if err != nil {
