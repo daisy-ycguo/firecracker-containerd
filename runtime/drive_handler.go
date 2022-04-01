@@ -53,6 +53,7 @@ func CreateContainerStubs(
 	logger *logrus.Entry,
 ) (*StubDriveHandler, error) {
 	var containerStubs []*stubDrive
+	logger.Debugf("!!! into CreateContainerStubs, containerCount=%d", containerCount)
 	for i := 0; i < containerCount; i++ {
 		isWritable := true
 		var rateLimiter *proto.FirecrackerRateLimiter
@@ -66,6 +67,7 @@ func CreateContainerStubs(
 			return nil, errors.Wrap(err, "failed to create container stub drive")
 		}
 
+		logger.Debugf("!!! append, %d: path=%s", i, stubDrive.stubPath)
 		machineCfg.Drives = append(machineCfg.Drives, models.Drive{
 			DriveID:      firecracker.String(stubDrive.driveID),
 			PathOnHost:   firecracker.String(stubDrive.stubPath),
@@ -181,8 +183,11 @@ func CreateDriveMountStubs(
 	driveMounts []*proto.FirecrackerDriveMount,
 	logger *logrus.Entry,
 ) ([]MountableStubDrive, error) {
+	logger.Debug("!!! into CreateDriveMountStubs")
 	containerStubs := make([]MountableStubDrive, len(driveMounts))
 	for i, driveMount := range driveMounts {
+		logger.Debugf("!!! drivemout %d is %v\n", i, driveMount)
+		logger.Debugf("!!! PathOnHost is %s\n", driveMount.HostPath)
 		isWritable := driveMount.IsWritable
 		rateLimiter := driveMount.RateLimiter
 		stubFileName := fmt.Sprintf("drivemntstub%d", i)

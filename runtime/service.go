@@ -657,9 +657,10 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 
 	s.createHTTPControlClient()
 
-	s.logger.Debug("machine=", s.machine)
+	//sync time
+	s.execCMD(requestCtx, "systemctl restart chrony")
 
-	//s.firecrackerPid = snapshotResp.FirecrackerPID
+	s.logger.Debug("machine=", s.machine)
 	s.logger.Debug("successfully start VM from snapshot")
 
 	if s.machine.Cfg.NetNS != "" && newIP != "" {
@@ -1225,6 +1226,7 @@ func (s *service) UpdateBalloonStats(requestCtx context.Context, req *proto.Upda
 }
 
 func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker.Config, error) {
+	s.logger.Debug("!!! into buildVMConfiguration")
 	for _, driveMount := range req.DriveMounts {
 		// Verify the request specified an absolute path for the source/dest of drives.
 		// Otherwise, users can implicitly rely on the CWD of this shim or agent.
@@ -1316,12 +1318,14 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 		containerCount = 1
 	}
 
+	s.logger.Debug("!!! to CreateContainerStubs")
 	s.containerStubHandler, err = CreateContainerStubs(
 		&cfg, s.jailer, containerCount, s.logger)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create container stub drives")
 	}
 
+	s.logger.Debug("!!! to CreateContainerStubs")
 	s.driveMountStubs, err = CreateDriveMountStubs(
 		&cfg, s.jailer, req.DriveMounts, s.logger)
 	if err != nil {
@@ -1460,6 +1464,7 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 		"stdout":     request.Stdout,
 		"stderr":     request.Stderr,
 		"checkpoint": request.Checkpoint,
+		"rootfs":     request.Rootfs[0],
 	}).Debug("creating task")
 
 	hostBundleDir := bundle.Dir(request.Bundle)
