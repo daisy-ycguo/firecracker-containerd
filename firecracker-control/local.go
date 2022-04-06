@@ -95,7 +95,6 @@ func newLocal(ic *plugin.InitContext) (*local, error) {
 // AlreadyExists is returned.
 func (s *local) CreateVM(requestCtx context.Context, req *proto.CreateVMRequest) (*proto.CreateVMResponse, error) {
 	var err error
-
 	id := req.GetVMID()
 	if err := identifiers.Validate(id); err != nil {
 		s.logger.WithError(err).Error()
@@ -181,6 +180,7 @@ func (s *local) CreateVM(requestCtx context.Context, req *proto.CreateVMRequest)
 	if err != nil {
 		return nil, err
 	}
+	s.logger.Info("Shim process started, Record timestamp!!!")
 
 	defer func() {
 		if err != nil {
@@ -205,6 +205,7 @@ func (s *local) CreateVM(requestCtx context.Context, req *proto.CreateVMRequest)
 
 	s.addShim(shimSocketAddress, cmd)
 
+	s.logger.Info("Firecracker process started, Record timestamp!!!")
 	return resp, nil
 }
 

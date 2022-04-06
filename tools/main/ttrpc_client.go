@@ -18,19 +18,33 @@ func main() {
 	ctx := context.Background()
 	logger := log.G(ctx)
 
-	conn, err := vm.VSockDial(ctx, logger, "/var/lib/firecracker-containerd/shim-base/default#ca688585-b1dd-4a83-aade-1be5c08265f3/firecracker.vsock", _defaultVsockPort)
+	conn, err := vm.VSockDial(ctx, logger, "/var/lib/firecracker-containerd/shim-base/default#7ab881ea-b115-4bb5-a3f5-08b11a4c54e4/firecracker.vsock", _defaultVsockPort)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
+	//command_str := "runc --rootless true --root /run/containerd/runc/default list"
+	//command_str := "ls /run/containerd/runc/default"
+	command_str := "ls /usr/local/bin"
+	//command_str := "netstat -p"
+	//command_str := "ps -aux"
+	//command_str := "cat /container/count155/config.json"
+	//command_str := "ip netns list"
+	//command_str := "curl http://127.0.0.1:8080/2015-03-31/functions/function/invocations"
+	//command_str := "journalctl -u firecracker-agent"
+	//command_str := "ls /var/run/containerd/runc/default/count155"
+	//command_str := "cat /var/run/containerd/runc/default/count155/state.json"
+
 	rpcClient := ttrpc.NewClient(conn, ttrpc.WithOnClose(func() { _ = conn.Close() }))
 	var resp drivemount.ExecCmdResponse
 	req := drivemount.ExecCmdRequest{
-		Cmd: "journalctl -u firecracker-agent",
+		//Cmd: "runc --rootless true --root /container/count152 list",
+		Cmd: command_str,
 	}
 	err = rpcClient.Call(context.Background(), "DriveMounter", "ExecCmd", &req, &resp)
 
+	fmt.Printf("Exec %s\n", command_str)
 	fmt.Println(resp.Outstr)
 	if err != nil {
 		fmt.Println("Call ExecCmd failed with error:")
@@ -39,6 +53,5 @@ func main() {
 	}
 
 	fmt.Println("successfully executed command")
-	return
 
 }

@@ -76,7 +76,6 @@ func init() {
 }
 
 const (
-	templateTaskID   = "count69"
 	defaultVsockPort = 10789
 	minVsockIOPort   = uint32(11000)
 
@@ -343,7 +342,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	logrus.SetOutput(logFifo)
 
 	log := log.G(shimCtx).WithField("task_id", opts.ID)
-	log.Info("StartShim, record timestamp!!!")
+	log.Info("StartShim, Record timestamp!!!")
 
 	// If we are running a shim start routine, we can safely assume our current working
 	// directory is the bundle directory
@@ -406,6 +405,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 			return "", errors.Wrap(err, "unexpected error from CreateVM")
 		}
 	}
+	log.Debug("fcControlClient.CreateVM done, Record timestamp!!!")
 
 	// The shim cannot support traditional -version/-v flag because
 	// - shim.Run() will call flag.Parse(). So our main cannot call flag.Parse() before that.
@@ -493,14 +493,14 @@ func (s *service) execCMD(requestCtx context.Context, cmdstr string) (string, er
 //         valid_lft forever preferred_lft forever
 //         inet6 fe80::a8cb:78ff:fe61:46da/64 scope link
 //         valid_lft forever preferred_lft forever`
-func get_ip_from_addr(addr string) (string) {
+func get_ip_from_addr(addr string) string {
 	sl := strings.Fields(addr)
-        for index, str := range sl {
-                if str == "inet" {
+	for index, str := range sl {
+		if str == "inet" {
 			// Overflow???
-                        return sl[index+1]
-                }
-        }
+			return sl[index+1]
+		}
+	}
 	return ""
 }
 
@@ -513,7 +513,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		resp        proto.CreateVMResponse
 		snapshotReq proto.LoadSnapshotRequest
 		//snapshotResp proto.LoadResponse
-		newIP       string
+		newIP string
 	)
 
 	// create VM files and etc.
@@ -597,6 +597,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		return nil, errors.Wrapf(err, "failed to create new machine instance")
 	}
 
+	s.logger.Info("Begin to setup network. Record timestamp!!!")
 	newIP = ""
 	//Cfg.NetNS is set by NewMachine()
 	if s.machine.Cfg.NetNS != "" {
@@ -627,6 +628,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		}
 
 	}
+	s.logger.Info("End of setup network. Record timestamp!!!")
 
 	snapshotReq.MemFilePath = s.config.SnapshotMemFile
 	snapshotReq.SnapshotFilePath = s.config.SnapshotMetaFile
@@ -663,6 +665,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 	s.logger.Debug("machine=", s.machine)
 	s.logger.Debug("successfully start VM from snapshot")
 
+	s.logger.Info("Begin to recofig network. Record timestamp!!!")
 	if s.machine.Cfg.NetNS != "" && newIP != "" {
 		outstr, err := s.execCMD(requestCtx, "busybox ip addr show eth0")
 		if err != nil {
@@ -674,18 +677,19 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 			s.logger.Debug("Failed to get old IP")
 			return nil, errors.New("Failed to get old IP")
 		}
-		_, err = s.execCMD(requestCtx, "busybox ip addr del " + oldIP + " dev eth0")
+		_, err = s.execCMD(requestCtx, "busybox ip addr del "+oldIP+" dev eth0")
 		if err != nil {
 			s.logger.WithError(err).Fatalf("Failed to delete old IP address")
 			return nil, errors.Wrapf(err, "Failed to delete old IP address")
 		}
 
-		_, err = s.execCMD(requestCtx, "busybox ip addr add " + newIP + " dev eth0")
+		_, err = s.execCMD(requestCtx, "busybox ip addr add "+newIP+" dev eth0")
 		if err != nil {
 			s.logger.WithError(err).Fatalf("Failed to add new IP address")
 			return nil, errors.Wrapf(err, "Failed to add new IP address")
 		}
 	}
+	s.logger.Info("End of recofig network. Record timestamp!!!")
 
 	// creating the VM succeeded, setup monitors and publish events to celebrate
 	err = s.publishVMStart()
@@ -709,20 +713,25 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 // received. Any subsequent requests will be ignored and get an AlreadyExists error response.
 func (s *service) CreateVM(requestCtx context.Context, request *proto.CreateVMRequest) (*proto.CreateVMResponse, error) {
 	//defer logPanicAndDie(s.logger)
-
-	s.logger.Info("!!!! into CreateVM. record timestamp!!!")
+	var (
+		err  error
+		resp *proto.CreateVMResponse
+	)
+	s.logger.Info("Into CreateVM. Record timestamp!!!")
 
 	// first time to check if load from snapshot
-	_, err := os.Stat(s.config.SnapshotMemFile)
+	_, err = os.Stat(s.config.SnapshotMemFile)
 	if err == nil {
 		s.isQuickStart = true
 		s.logger.Debug("!!!! into snapshot CreateVM")
-		return s.createVMFromSnapshot(requestCtx, request)
+		resp, err = s.createVMFromSnapshot(requestCtx, request)
 	} else {
 		s.isQuickStart = false
 		s.logger.Debug("!!!! into triditional CreateVM")
-		return s.createVMCommon(requestCtx, request)
+		resp, err = s.createVMCommon(requestCtx, request)
 	}
+	s.logger.Info("End of CreateVM. Record timestamp!!!")
+	return resp, err
 }
 
 // createVMCommon will attempt to create the VM as specified in the provided request, but only on the first request
@@ -760,6 +769,8 @@ func (s *service) createVMCommon(requestCtx context.Context, request *proto.Crea
 		}
 		return nil, errors.Wrap(err, "failed to create VM")
 	}
+
+	s.logger.Info("publishVMStart. Record timestamp!!!")
 
 	// creating the VM succeeded, setup monitors and publish events to celebrate
 	err = s.publishVMStart()
@@ -862,6 +873,7 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 	}
 
 	opts = append(opts, jailedOpts...)
+	s.logger.Debug("before new machine")
 
 	// In the event that a noop jailer is used, we will pass in the shim context
 	// and have the SDK construct a new machine using that context. Otherwise, a
@@ -872,15 +884,17 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		return errors.Wrapf(err, "failed to create new machine instance")
 	}
 
+	s.logger.Debug("after new machine")
 	if err = s.machine.Start(s.shimCtx); err != nil {
 		return errors.Wrapf(err, "failed to start the VM")
 	}
 
-	s.logger.Debug("calling agent")
+	s.logger.Info("After machine start, Record Timestamp!!!")
 	conn, err := vm.VSockDial(requestCtx, s.logger, relVSockPath, defaultVsockPort)
 	if err != nil {
 		return errors.Wrapf(err, "failed to dial the VM over vsock")
 	}
+	s.logger.Info("After connecting agent, Record Timestamp!!!")
 
 	rpcClient := ttrpc.NewClient(conn, ttrpc.WithOnClose(func() { _ = conn.Close() }))
 	s.agentClient = taskAPI.NewTaskClient(rpcClient)
@@ -889,10 +903,12 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 	s.ioProxyClient = ioproxy.NewIOProxyClient(rpcClient)
 	s.exitAfterAllTasksDeleted = request.ExitAfterAllTasksDeleted
 
+	s.logger.Info("before mount driver")
 	err = s.mountDrives(requestCtx)
 	if err != nil {
 		return err
 	}
+	s.logger.Info("after mount driver")
 
 	s.createHTTPControlClient()
 
@@ -1442,7 +1458,7 @@ func (s *service) deleteFIFOs(taskID, execID string) error {
 }
 
 func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
-	s.logger.Debug("!!!! into runtime Create")
+	s.logger.Info("Into Create Task, Record timestamp!!!")
 
 	var (
 		resp *taskAPI.CreateTaskResponse
@@ -1570,13 +1586,13 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 	// 	}
 	// }
 
-	s.logger.Debug("!!!! the end of Create method")
+	s.logger.Info("Out of Create Task, Record timestamp!!!")
 	return resp, nil
 }
 
 func (s *service) Start(requestCtx context.Context, req *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
-	s.logger.Debug("start!!!")
+	s.logger.Info("Into Start, Record timestamp!!!")
 
 	var (
 		resp *taskAPI.StartResponse
@@ -1595,7 +1611,7 @@ func (s *service) Start(requestCtx context.Context, req *taskAPI.StartRequest) (
 	if err != nil {
 		return nil, err
 	}
-	s.logger.Debug("the end of start!!!")
+	s.logger.Info("Out of Start, Record timestamp!!!")
 
 	return resp, nil
 }
@@ -1709,7 +1725,7 @@ func (s *service) State(requestCtx context.Context, req *taskAPI.StateRequest) (
 	defer logPanicAndDie(log.G(requestCtx))
 
 	logger := log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID})
-	logger.Debug("state!!!")
+	logger.Info("Into State, Record timestamp!!!")
 	resp, err := s.agentClient.State(requestCtx, req)
 	if err != nil {
 		logger.Debug("agent.state error")
@@ -1741,7 +1757,7 @@ func (s *service) State(requestCtx context.Context, req *taskAPI.StateRequest) (
 	if state.IsOpen {
 		logger.Debug("proxy is still alive")
 		logger.Debug("status is", resp.Status)
-		s.logger.Info("the end of state!!! Record timestamp")
+		logger.Info("Out of State, Record timestamp!!!")
 		return resp, nil
 	}
 
@@ -1751,7 +1767,7 @@ func (s *service) State(requestCtx context.Context, req *taskAPI.StateRequest) (
 		return nil, err
 	}
 
-	s.logger.Info("the end of state!!! Record timestamp")
+	logger.Info("Out of State, Record timestamp!!!")
 	return resp, nil
 }
 
@@ -2181,8 +2197,8 @@ func (s *service) startFirecrackerProcess() error {
 
 	if s.machine.Cfg.NetNS != "" {
 		err := ns.WithNetNSPath(s.machine.Cfg.NetNS, func(_ ns.NetNS) error {
-                        return firecrackerCmd.Start()
-                })
+			return firecrackerCmd.Start()
+		})
 		if err != nil {
 			logrus.WithError(err).Error("Failed to start firecracker process in netns")
 		}

@@ -87,6 +87,7 @@ func main() {
 
 	shimCtx, shimCancel := context.WithCancel(namespaces.WithNamespace(context.Background(), defaultNamespace))
 	group, shimCtx := errgroup.WithContext(shimCtx)
+	log.G(shimCtx).Info("into Agent")
 
 	// Ensure this process is a subreaper or else containers created via runc will
 	// not be its children.
@@ -98,12 +99,13 @@ func main() {
 	// This can be wrapped to add missing functionality (like
 	// running multiple containers inside one Firecracker VM)
 
-	log.G(shimCtx).Info("creating task service")
+	log.G(shimCtx).Info("Begin of starting ttrpc server")
 
 	server, err := ttrpc.NewServer()
 	if err != nil {
 		log.G(shimCtx).WithError(err).Fatal("failed to create ttrpc server")
 	}
+	log.G(shimCtx).Info("end of starting ttrpc server")
 
 	eventExchange := &event.ExchangeCloser{Exchange: exchange.NewExchange()}
 	eventbridge.RegisterGetterService(server, eventbridge.NewGetterService(shimCtx, eventExchange))
@@ -112,25 +114,32 @@ func main() {
 	// check the disk
 	//taskID, pid := getContainerPid()
 
+	log.G(shimCtx).Info("Begin of new task service")
 	taskService, err := NewTaskService(shimCtx, shimCancel, eventExchange)
 	if err != nil {
 		log.G(shimCtx).WithError(err).Fatal("failed to create task service")
 	}
+	log.G(shimCtx).Info("End of new task service")
 	taskAPI.RegisterTaskService(server, taskService)
 
+	log.G(shimCtx).Info("Begin of new driver handler service")
 	dh, err := newDriveHandler(blockPath, drivePath)
 	if err != nil {
 		log.G(shimCtx).WithError(err).Fatal("failed to create drive handler")
 	}
+	log.G(shimCtx).Info("End of new driver handler service")
 	drivemount.RegisterDriveMounterService(server, dh)
 
+	log.G(shimCtx).Info("Begin of register IO proxy service")
 	ioproxy.RegisterIOProxyService(server, &ioProxyHandler{
 		runcService: taskService.runcService,
 		taskManager: taskService.taskManager,
 	})
+	log.G(shimCtx).Info("End of register IO proxy service")
 
 	// Run ttrpc over vsock
 
+	log.G(shimCtx).Info("Begin of start vsock listener")
 	vsockLogger := log.G(shimCtx).WithField("port", port)
 	listener, err := vm.VSockListener(shimCtx, vsockLogger, uint32(port))
 	if err != nil {
@@ -145,6 +154,7 @@ func main() {
 		}
 		return err
 	})
+	log.G(shimCtx).Info("End of start vsock listener")
 
 	group.Go(func() error {
 		defer func() {
