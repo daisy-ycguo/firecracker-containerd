@@ -14,7 +14,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
@@ -177,26 +176,24 @@ func (dh driveHandler) ExecCmd(ctx context.Context, req *drivemount.ExecCmdReque
 	log.G(ctx).Info("enter exec cmd")
 	fmt.Println("enter exec cmd")
 
-	var out bytes.Buffer
 	cmd_str := strings.Fields(req.Cmd)
 
 	fmt.Println(cmd_str)
 	cmd := exec.Command(cmd_str[0], cmd_str[1:]...)
-	cmd.Stdout = &out
-	err := cmd.Run()
+	stdouterr, err := cmd.CombinedOutput()
 
 	//log.G(ctx).Info("Command output", out.String())
 	//logger = logger.WithField("Command output", out.String())
 	//logger.Info(out.String())
 
+	resp.Outstr = string(stdouterr)
 	if err == nil {
-		resp.Outstr = out.String()
 		log.G(ctx).Info("Success exec cmd")
 		return &resp, nil
 	}
 
 	logger.Error("failed to execute.")
-	return nil, errors.Errorf("failed to execute %q", cmd_str)
+	return &resp, err
 }
 
 func (dh driveHandler) MountDrive(ctx context.Context, req *drivemount.MountDriveRequest) (*empty.Empty, error) {

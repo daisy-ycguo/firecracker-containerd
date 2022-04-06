@@ -46,6 +46,7 @@ import (
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/fifo"
 	"github.com/containerd/ttrpc"
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/gofrs/uuid"
@@ -484,6 +485,25 @@ func (s *service) execCMD(requestCtx context.Context, cmdstr string) (string, er
 	return resp.Outstr, nil
 }
 
+// Get IP address substring from the output of `ip addr show xxx`.
+// The output is like:
+// `2: veth0@if190: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
+//         link/ether aa:cb:78:61:46:da brd ff:ff:ff:ff:ff:ff link-netnsid 0
+//         inet 192.168.2.18/24 brd 192.168.2.255 scope global veth0
+//         valid_lft forever preferred_lft forever
+//         inet6 fe80::a8cb:78ff:fe61:46da/64 scope link
+//         valid_lft forever preferred_lft forever`
+func get_ip_from_addr(addr string) (string) {
+	sl := strings.Fields(addr)
+        for index, str := range sl {
+                if str == "inet" {
+			// Overflow???
+                        return sl[index+1]
+                }
+        }
+	return ""
+}
+
 // createVMFromSnapshot will attempt to create the VM as specified in the provided request, but only on the first request
 // received. Any subsequent requests will be ignored and get an AlreadyExists error response.
 func (s *service) createVMFromSnapshot(requestCtx context.Context, request *proto.CreateVMRequest) (*proto.CreateVMResponse, error) {
@@ -493,6 +513,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		resp        proto.CreateVMResponse
 		snapshotReq proto.LoadSnapshotRequest
 		//snapshotResp proto.LoadResponse
+		newIP       string
 	)
 
 	// create VM files and etc.
@@ -576,6 +597,37 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 		return nil, errors.Wrapf(err, "failed to create new machine instance")
 	}
 
+	newIP = ""
+	//Cfg.NetNS is set by NewMachine()
+	if s.machine.Cfg.NetNS != "" {
+		//setupNetwork
+		err := s.machine.SetupNetwork(s.shimCtx)
+		if err != nil {
+			s.logger.WithError(err).Fatalf("Failed to SetupNetwork")
+			return nil, errors.Wrapf(err, "SetupNetwork failed")
+		}
+		//get default_network_interface name
+		cniItfce := s.machine.Cfg.NetworkInterfaces.CniInterface()
+		ifName := cniItfce.CNIConfiguration.IfName
+		//get netns, lookup ip address of default_network_interface in netns
+		netnsPath := strings.Split(s.machine.Cfg.NetNS, "/")
+		netns := netnsPath[len(netnsPath)-1]
+		cmd := exec.Command("ip", "-n", netns, "address", "show", ifName)
+		output, err := cmd.Output()
+		if err != nil {
+			s.logger.WithError(err).Fatalf("Failed to get IP address")
+			return nil, errors.Wrapf(err, "Failed to get IP address")
+		}
+
+		s.logger.Debug("IP address XXXX", string(output))
+		newIP = get_ip_from_addr(string(output))
+		s.logger.Debug("get_ip_from_addr returns", newIP)
+		if newIP == "" {
+			return nil, errors.New("Failed to get New IP")
+		}
+
+	}
+
 	snapshotReq.MemFilePath = s.config.SnapshotMemFile
 	snapshotReq.SnapshotFilePath = s.config.SnapshotMetaFile
 	snapshotReq.EnableUserPF = false
@@ -609,6 +661,30 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 
 	//s.firecrackerPid = snapshotResp.FirecrackerPID
 	s.logger.Debug("successfully start VM from snapshot")
+
+	if s.machine.Cfg.NetNS != "" && newIP != "" {
+		outstr, err := s.execCMD(requestCtx, "busybox ip addr show eth0")
+		if err != nil {
+			s.logger.WithError(err).Fatalf("Failed to get VM IP address")
+			return nil, errors.Wrapf(err, "Failed to get VM IP address")
+		}
+		oldIP := get_ip_from_addr(outstr)
+		if oldIP == "" {
+			s.logger.Debug("Failed to get old IP")
+			return nil, errors.New("Failed to get old IP")
+		}
+		_, err = s.execCMD(requestCtx, "busybox ip addr del " + oldIP + " dev eth0")
+		if err != nil {
+			s.logger.WithError(err).Fatalf("Failed to delete old IP address")
+			return nil, errors.Wrapf(err, "Failed to delete old IP address")
+		}
+
+		_, err = s.execCMD(requestCtx, "busybox ip addr add " + newIP + " dev eth0")
+		if err != nil {
+			s.logger.WithError(err).Fatalf("Failed to add new IP address")
+			return nil, errors.Wrapf(err, "Failed to add new IP address")
+		}
+	}
 
 	// creating the VM succeeded, setup monitors and publish events to celebrate
 	err = s.publishVMStart()
@@ -2098,8 +2174,17 @@ func (s *service) startFirecrackerProcess() error {
 	firecrackerCmd := exec.Command(firecPath, args...)
 	firecrackerCmd.Dir = s.shimDir.RootPath()
 
-	if err := firecrackerCmd.Start(); err != nil {
-		logrus.WithError(err).Error("Failed to start firecracker process")
+	if s.machine.Cfg.NetNS != "" {
+		err := ns.WithNetNSPath(s.machine.Cfg.NetNS, func(_ ns.NetNS) error {
+                        return firecrackerCmd.Start()
+                })
+		if err != nil {
+			logrus.WithError(err).Error("Failed to start firecracker process in netns")
+		}
+	} else {
+		if err := firecrackerCmd.Start(); err != nil {
+			logrus.WithError(err).Error("Failed to start firecracker process")
+		}
 	}
 
 	go firecrackerCmd.Wait()

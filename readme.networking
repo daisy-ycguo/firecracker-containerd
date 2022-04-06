@@ -1,0 +1,142 @@
+================ firecracker-go-sdk ===========
+1, Clone firecracker-go-sdk to the parent directory as this repo.
+2, Checkout the current commit that used by this repo
+3, Apply the following diff to firecracker-go-sdk:
+----------- diff ----------------
+diff --git a/machine.go b/machine.go
+index 1b600eb..8386eba 100644
+--- a/machine.go
++++ b/machine.go
+@@ -433,6 +433,9 @@ func (m *Machine) Wait(ctx context.Context) error {
+        }
+ }
+
++func (m *Machine) SetupNetwork(ctx context.Context) error {
++       return m.setupNetwork(ctx)
++}
+ func (m *Machine) setupNetwork(ctx context.Context) error {
+        err, cleanupFuncs := m.Cfg.NetworkInterfaces.setupNetwork(ctx, m.Cfg.VMID, m.Cfg.NetNS, m.logger)
+        m.cleanupFuncs = append(m.cleanupFuncs, cleanupFuncs...)
+diff --git a/network.go b/network.go
+index 346704e..59faf4e 100644
+--- a/network.go
++++ b/network.go
+@@ -166,6 +166,10 @@ func (networkInterfaces NetworkInterfaces) setupNetwork(
+        return nil, cleanupFuncs
+ }
+
++func (networkInterfaces NetworkInterfaces) CniInterface() *NetworkInterface {
++       return  networkInterfaces.cniInterface()
++}
++
+ // return the network interface that has CNI configuration, or nil if there is no such interface
+ func (networkInterfaces NetworkInterfaces) cniInterface() *NetworkInterface {
+        // Validation that there is at most one CNI interface is done as part of the
+
+----------- diff end ---------------------
+4, `make all` and `make install`
+
+================ make and install CNI binary =========
+`make cni-bins`
+`make install-cni-bins`
+
+================ CNI config ==================
+/etc/cni/conf.d/fcnet.conflist   :
+
+{
+  "cniVersion": "0.4.0",
+  "name": "fcnet",
+  "plugins": [
+    {
+      "type": "ptp",
+      "ipMasq": true,
+      "ipam": {
+        "type": "host-local",
+        "subnet": "192.168.2.0/24",
+        "resolvConf": "/etc/resolv.conf"
+      }
+    },
+    {
+      "type": "firewall"
+    },
+    {
+      "type": "tc-redirect-tap"
+    }
+  ]
+}
+
+=============== firecracker runtime config =============
+/etc/containerd/firecracker-runtime.json
+
+{
+  "firecracker_binary_path": "/usr/local/bin/firecracker",
+  "kernel_image_path": "/var/lib/firecracker-containerd/runtime/hello-vmlinux.bin",
+  "kernel_args": "console=ttyS0 noapic reboot=k panic=1 pci=off nomodules ro systemd.unified_cgroup_hierarchy=0 systemd.journald.forward_to_console systemd.unit=firecracker.target init=/sbin/overlay-init",
+  "root_drive": "/var/lib/firecracker-containerd/runtime/default-rootfs.img",
+  "cpu_template": "T2",
+  "log_fifo": "fc-logs.fifo",
+  "log_levels": ["debug"],
+  "metrics_fifo": "fc-metrics.fifo",
+  "snapshot_mem_file": "/var/lib/firecracker-containerd/shim-base/default#9ac6a86b-2d95-4cca-a13c-76b2c8565e9c/mem_file",
+  "snapshot_meta_file": "//var/lib/firecracker-containerd/shim-base/default#9ac6a86b-2d95-4cca-a13c-76b2c8565e9c/snapshot_file",
+  "default_network_interfaces": [
+    {
+      "CNIConfig": {
+        "NetworkName": "fcnet",
+        "InterfaceName": "veth0"
+      }
+    }
+  ]
+ }
+
+============= rootfs =================
+----resolv.conf----
+ALL OPERATIONS SHALL BE IN THE tmp/rootfs/ DIRECTORY
+tmp/rootfs/etc/resolv.conf is a symbol link to /dev/pnp in the default rootfs.
+1, remove that symbol link by `unlink etc/resolv.conf`
+2, edit etc/resolv.conf by adding "nameserver 8.8.8.8"
+
+----busybox----
+The current approach relies on busybox to execute the IP manipulating commands.
+Put a busybox binary in the same directory as the agent binary which is in usr/loca/bin/
+
+---- rebuild ---
+Remove the old rootfs.img and rebuild rootfs.img
+Use the new built rootfs.img
+
+=========== invoke ===================
+1, create a new instances from snapshot as normal. For example,
+# firecracker-ctr --address /run/firecracker-containerd/containerd.sock   run   --snapshotter devmapper   --runtime aws.firecracker   --rm --tty  docker.io/library/busybox:latest busybox6666
+2, find the IP address of the newly created instance by finding the new entry in the output of `route`
+
+root@81192:/var/lib/firecracker-containerd/shim-base# route
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+default         _gateway        0.0.0.0         UG    0      0        0 ens785f0
+10.88.0.0       0.0.0.0         255.255.0.0     U     0      0        0 cni0
+10.88.0.0       0.0.0.0         255.255.0.0     U     0      0        0 eth0
+172.16.0.0      0.0.0.0         255.255.192.0   U     0      0        0 ens785f0
+172.17.0.0      0.0.0.0         255.255.0.0     U     0      0        0 docker0
+192.168.0.0     0.0.0.0         255.255.255.0   U     0      0        0 tap11
+192.168.2.2     0.0.0.0         255.255.255.255 UH    0      0        0 veth57dccc94
+192.168.2.3     0.0.0.0         255.255.255.255 UH    0      0        0 vethc4c14620
+192.168.2.4     0.0.0.0         255.255.255.255 UH    0      0        0 veth9f3f2caf
+192.168.2.5     0.0.0.0         255.255.255.255 UH    0      0        0 veth9a53482a
+192.168.2.9     0.0.0.0         255.255.255.255 UH    0      0        0 veth2519bca2
+192.168.2.10    0.0.0.0         255.255.255.255 UH    0      0        0 vethb24496f8
+192.168.2.14    0.0.0.0         255.255.255.255 UH    0      0        0 veth3aa17777
+192.168.2.15    0.0.0.0         255.255.255.255 UH    0      0        0 veth4c772fbc
+192.168.2.16    0.0.0.0         255.255.255.255 UH    0      0        0 vethd990dba8
+192.168.2.17    0.0.0.0         255.255.255.255 UH    0      0        0 veth21443e8a
+192.168.2.18    0.0.0.0         255.255.255.255 UH    0      0        0 vethcd9a85fe
+192.168.2.19    0.0.0.0         255.255.255.255 UH    0      0        0 veth6d8bbbf7
+192.168.2.21    0.0.0.0         255.255.255.255 UH    0      0        0 veth947b6206
+192.168.2.22    0.0.0.0         255.255.255.255 UH    0      0        0 veth477d4cd5
+192.168.2.23    0.0.0.0         255.255.255.255 UH    0      0        0 veth62ca5d71
+192.168.2.24    0.0.0.0         255.255.255.255 UH    0      0        0 vethc6cbdd3c
+
+Normally the last one is the IP of the newly created instance.
+# ping 192.168.2.24 
+PING 192.168.2.24 (192.168.2.24) 56(84) bytes of data.
+64 bytes from 192.168.2.24: icmp_seq=1 ttl=64 time=4.31 ms
+64 bytes from 192.168.2.24: icmp_seq=2 ttl=64 time=0.328 ms
