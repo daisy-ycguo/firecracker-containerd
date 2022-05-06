@@ -164,9 +164,12 @@ func (ts *TaskService) Create(requestCtx context.Context, req *taskAPI.CreateTas
 	}
 
 	// this is technically validated earlier by containerd, but is added here too for extra safety
-	taskExecID, err := TaskExecID(taskID, execID)
-	if err != nil {
-		return nil, errors.Wrap(err, "invalid task and/or exec ID")
+	var taskExecID string
+	if !ts.taskManager.IsRestored() {
+		taskExecID, err = TaskExecID(taskID, execID)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid task and/or exec ID")
+		}
 	}
 
 	defer func() {
@@ -187,34 +190,45 @@ func (ts *TaskService) Create(requestCtx context.Context, req *taskAPI.CreateTas
 	req.Options = extraData.RuncOptions
 
 	bundleDir := bundle.Dir(req.Bundle)
-	ts.addCleanup(taskExecID, func() error {
-		err := os.RemoveAll(bundleDir.RootPath())
-		if err != nil {
-			return errors.Wrapf(err, "failed to remove bundle path %q", bundleDir.RootPath())
-		}
-		return nil
-	})
+	if !ts.taskManager.IsRestored() {
+		//extraData, err := unmarshalExtraData(req.Options)
+		//if err != nil {
+		//	return nil, errors.Wrap(err, "failed to unmarshal extra data")
+		//}
 
-	// check the rootfs dir has been created (presumed to be by a previous MountDrive call)
-	rootfsStat, err := os.Stat(bundleDir.RootfsPath())
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stat bundle's rootfs path %q", bundleDir.RootfsPath())
-	}
-	if !rootfsStat.IsDir() {
-		return nil, errors.Errorf("bundle's rootfs path %q is not a dir", bundleDir.RootfsPath())
-	}
-	ts.addCleanup(taskExecID, func() error {
-		err := mount.UnmountAll(bundleDir.RootfsPath(), unix.MNT_DETACH)
-		if err != nil {
-			return errors.Wrapf(err, "failed to unmount bundle rootfs %q", bundleDir.RootfsPath())
-		}
-		return nil
-	})
+		// Just provide runc the options it knows about, not our wrapper
+		//req.Options = extraData.RuncOptions
 
-	err = bundleDir.OCIConfig().Write(extraData.JsonSpec)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to write oci config file")
-	}
+		// bundleDir := bundle.Dir(req.Bundle)
+		ts.addCleanup(taskExecID, func() error {
+			err := os.RemoveAll(bundleDir.RootPath())
+			if err != nil {
+				return errors.Wrapf(err, "failed to remove bundle path %q", bundleDir.RootPath())
+			}
+			return nil
+		})
+
+		// check the rootfs dir has been created (presumed to be by a previous MountDrive call)
+		rootfsStat, err := os.Stat(bundleDir.RootfsPath())
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to stat bundle's rootfs path %q", bundleDir.RootfsPath())
+		}
+		if !rootfsStat.IsDir() {
+			return nil, errors.Errorf("bundle's rootfs path %q is not a dir", bundleDir.RootfsPath())
+		}
+		ts.addCleanup(taskExecID, func() error {
+			err := mount.UnmountAll(bundleDir.RootfsPath(), unix.MNT_DETACH)
+			if err != nil {
+				return errors.Wrapf(err, "failed to unmount bundle rootfs %q", bundleDir.RootfsPath())
+			}
+			return nil
+		})
+
+		err = bundleDir.OCIConfig().Write(extraData.JsonSpec)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to write oci config file")
+		}
+        }
 
 	var ioConnectorSet vm.IOProxy
 	var fifoSet *cio.FIFOSet
@@ -266,10 +280,12 @@ func (ts *TaskService) Create(requestCtx context.Context, req *taskAPI.CreateTas
 		ioConnectorSet = vm.NewIOConnectorProxy(stdinConnectorPair, stdoutConnectorPair, stderrConnectorPair)
 	}
 
+	logger.Info("before CreateTask")
 	resp, err := ts.taskManager.CreateTask(requestCtx, req, ts.runcService, ioConnectorSet, fifoSet)
 	if err != nil {
 		return nil, err
 	}
+	logger.Info("end CreateTask")
 
 	logger.WithField("pid", resp.Pid).Info("agent output: agent.create succeeded")
 	return resp, nil

@@ -198,6 +198,7 @@ func (ioConnectorSet *ioConnectorSet) IsOpen() bool {
 func (ioConnectorSet *ioConnectorSet) start(proc *vmProc) (ioInitDone <-chan error, ioCopyDone <-chan error) {
 	var initErrG errgroup.Group
 
+	proc.logger.Debug("ioproxy: into start")
 	// When one of the goroutines returns an error, we will cancel
 	// the rest of goroutines through the ctx below.
 	copyErrG, ctx := errgroup.WithContext(proc.ctx)
@@ -207,6 +208,7 @@ func (ioConnectorSet *ioConnectorSet) start(proc *vmProc) (ioInitDone <-chan err
 		copyErrG.Go(func() error { return <-copyErrCh })
 	}
 
+	proc.logger.Debug("ioproxy: 11111")
 	if ioConnectorSet.stdin != nil {
 		// For Stdin only, provide 0 as the timeout to wait after the proc exits before closing IO streams.
 		// There's no reason to send stdin data to a proc that's already dead.
@@ -214,18 +216,21 @@ func (ioConnectorSet *ioConnectorSet) start(proc *vmProc) (ioInitDone <-chan err
 	} else {
 		proc.logger.Debug("skipping proxy io for unset stdin")
 	}
+	proc.logger.Debug("ioproxy: stdin proxy start")
 
 	if ioConnectorSet.stdout != nil {
 		waitErrs(ioConnectorSet.stdout.proxy(ctx, proc.logger.WithField("stream", "stdout"), defaultIOFlushTimeout))
 	} else {
 		proc.logger.Debug("skipping proxy io for unset stdout")
 	}
+	proc.logger.Debug("ioproxy: stdout proxy start")
 
 	if ioConnectorSet.stderr != nil {
 		waitErrs(ioConnectorSet.stderr.proxy(ctx, proc.logger.WithField("stream", "stderr"), defaultIOFlushTimeout))
 	} else {
 		proc.logger.Debug("skipping proxy io for unset stderr")
 	}
+	proc.logger.Debug("ioproxy: stderr proxy start")
 
 	// These channels are not buffered, since we will close them right after having one error.
 	// Callers must read the channels.

@@ -265,17 +265,17 @@ func (m *taskManager) CreateTask(
 		}
 	}()
 
-	proc.logger.Debugf("!!! into internal vm create task, taskID=%s, execID=%s", taskID, execID)
+	proc.logger.Debugf("!!! into internal vm create task, taskID=%s, execID=%s, isRestored=%v", taskID, execID,m.IsRestored())
 	if m.IsRestored() {
 		//restored case
-		proc.logger.Debugf("!!! into internal vm create task - restored")
+		proc.logger.Debug("!!! into internal vm create task - restored")
 		oldproc, ok := m.tasks[m.tempTaskID][execID]
 		if !ok {
 			return nil, errors.Errorf("cannot fild template exec %q from task %q", execID, taskID)
 		}
 		oldproc.proxy.Close()
 	}
-	proc.logger.Debugf("!!! into internal vm create task - create io proxy")
+	proc.logger.Debug("!!! into internal vm create task - create io proxy")
 	proc.proxy = ioProxy
 	proc.fifoset = fifoset
 	// Begin initializing stdio, but don't block on the initialization so we can send the Create
@@ -285,7 +285,7 @@ func (m *taskManager) CreateTask(
 
 	var createResp *taskAPI.CreateTaskResponse
 	if !m.IsRestored() {
-		proc.logger.Debugf("!!! start to call taskService.Create")
+		proc.logger.Debug("!!! start to call taskService.Create")
 		createResp, err = taskService.Create(reqCtx, req)
 		if err != nil {
 			proc.logger.Debugf("!!! error 1 return from vm create task")
@@ -294,6 +294,8 @@ func (m *taskManager) CreateTask(
 	} else {
 		createResp = &taskAPI.CreateTaskResponse{Pid: uint32(m.tempPid)}
 	}
+
+	proc.logger.Debug("!!! wait for initDone")
 
 	// make sure stdio was initialized successfully
 	err = <-initDone
@@ -304,11 +306,11 @@ func (m *taskManager) CreateTask(
 
 	proc.logger.WithField("pid_in_vm", createResp.Pid).Info("successfully created task")
 
-	proc.logger.Debugf("!!! into internal vm create task - start monitors")
+	proc.logger.Debug("!!! into internal vm create task - start monitors")
 	go m.monitorExit(proc, taskService)
 	go monitorIO(copyDone, proc)
 
-	proc.logger.Debugf("!!! return from vm create task")
+	proc.logger.Debug("!!! return from vm create task")
 	return createResp, nil
 }
 

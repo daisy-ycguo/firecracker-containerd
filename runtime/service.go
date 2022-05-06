@@ -587,6 +587,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 	}
 
 	opts = append(opts, jailedOpts...)
+	s.logger.Debug("before new machine")
 
 	// In the event that a noop jailer is used, we will pass in the shim context
 	// and have the SDK construct a new machine using that context. Otherwise, a
@@ -596,6 +597,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create new machine instance")
 	}
+	s.logger.Debug("After machine start, Record Timestamp!!!")
 
 	s.logger.Info("Begin to setup network. Record timestamp!!!")
 	newIP = ""
@@ -638,12 +640,13 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 	if err != nil {
 		s.logger.WithError(err).Fatalf("Failed to LoadSnapshot")
 	}
+	s.logger.Debug("End of LoadSnapshot")
 
-	s.logger.Debug("calling agent")
 	conn, err := vm.VSockDial(requestCtx, s.logger, relVSockPath, defaultVsockPort)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to dial the VM over vsock")
 	}
+	s.logger.Debug("After connecting agent, Record Timestamp!!!")
 
 	s.rpcClient = ttrpc.NewClient(conn, ttrpc.WithOnClose(func() { _ = conn.Close() }))
 	s.agentClient = taskAPI.NewTaskClient(s.rpcClient)
@@ -660,9 +663,9 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 	s.createHTTPControlClient()
 
 	//sync time
-	s.execCMD(requestCtx, "systemctl restart chrony")
+	s.execCMD(requestCtx, "chronyc -a makestep")
 
-	s.logger.Debug("machine=", s.machine)
+	//s.logger.Debug("machine=", s.machine)
 	s.logger.Debug("successfully start VM from snapshot")
 
 	s.logger.Info("Begin to recofig network. Record timestamp!!!")
@@ -770,7 +773,7 @@ func (s *service) createVMCommon(requestCtx context.Context, request *proto.Crea
 		return nil, errors.Wrap(err, "failed to create VM")
 	}
 
-	s.logger.Info("publishVMStart. Record timestamp!!!")
+	//s.logger.Info("publishVMStart. Record timestamp!!!")
 
 	// creating the VM succeeded, setup monitors and publish events to celebrate
 	err = s.publishVMStart()
@@ -790,6 +793,7 @@ func (s *service) createVMCommon(requestCtx context.Context, request *proto.Crea
 	if c, ok := s.jailer.(cgroupPather); ok {
 		resp.CgroupPath = c.CgroupPath()
 	}
+	s.logger.Info("createVMCommon is done!")
 
 	return &resp, nil
 }
@@ -820,7 +824,7 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		return err
 	}
 
-	s.logger.Debug("creating new VM")
+	//s.logger.Debug("creating new VM")
 	s.jailer, err = newJailer(s.shimCtx, s.logger, dir.RootPath(), s, request)
 	if err != nil {
 		return errors.Wrap(err, "failed to create jailer")
@@ -873,7 +877,7 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 	}
 
 	opts = append(opts, jailedOpts...)
-	s.logger.Debug("before new machine")
+	s.logger.Debug("Before call firecracker.NewMachine")
 
 	// In the event that a noop jailer is used, we will pass in the shim context
 	// and have the SDK construct a new machine using that context. Otherwise, a
@@ -889,12 +893,12 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		return errors.Wrapf(err, "failed to start the VM")
 	}
 
-	s.logger.Info("After machine start, Record Timestamp!!!")
+	s.logger.Debug("After machine start, Record Timestamp!!!")
 	conn, err := vm.VSockDial(requestCtx, s.logger, relVSockPath, defaultVsockPort)
 	if err != nil {
 		return errors.Wrapf(err, "failed to dial the VM over vsock")
 	}
-	s.logger.Info("After connecting agent, Record Timestamp!!!")
+	s.logger.Debug("After connecting agent, Record Timestamp!!!")
 
 	rpcClient := ttrpc.NewClient(conn, ttrpc.WithOnClose(func() { _ = conn.Close() }))
 	s.agentClient = taskAPI.NewTaskClient(rpcClient)

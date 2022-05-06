@@ -67,6 +67,12 @@ func main() {
 	flag.BoolVar(&dtest, "test", false, "Show the version")
 	flag.Parse()
 
+
+	logrus.SetFormatter(&logrus.TextFormatter{
+		TimestampFormat: log.RFC3339NanoFixed,
+		FullTimestamp:   true,
+	})
+
 	if debug {
 		logrus.SetLevel(logrus.DebugLevel)
 	}

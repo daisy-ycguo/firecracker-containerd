@@ -6,7 +6,7 @@ IMAGE=$1
 NAME=template$(date +%s)
 THINPOOL_DEVICE_NAME=784
 THINPOOL_TABLE_NUM=849
-SNAPSHOT_PATH=/home/daisy/snapshot
+SNAPSHOT_PATH=/home/xinranwa/daisy/snapshot
 
 
 # Clean environment
