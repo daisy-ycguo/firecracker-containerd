@@ -20,11 +20,12 @@ require (
 	github.com/containerd/ttrpc v1.1.0
 	github.com/containerd/typeurl v1.0.2
 	github.com/containerd/zfs v1.0.0 // indirect
-	github.com/containernetworking/cni v0.8.1
-	github.com/containernetworking/plugins v0.9.1
+	github.com/containernetworking/cni v1.0.1
+	github.com/containernetworking/plugins v1.0.1
 	github.com/coreos/go-iptables v0.6.0 // indirect
 	github.com/firecracker-microvm/firecracker-go-sdk v0.22.1-0.20210520223842-abd0815b8bf9
 	github.com/go-ole/go-ole v1.2.4 // indirect
+	github.com/go-openapi/runtime v0.21.1 // indirect
 	github.com/gofrs/uuid v3.3.0+incompatible
 	github.com/gogo/googleapis v1.4.1 // indirect
 	github.com/gogo/protobuf v1.3.2
@@ -51,7 +52,7 @@ require (
 	github.com/shirou/gopsutil v2.18.12+incompatible
 	github.com/shirou/w32 v0.0.0-20160930032740-bb4de0191aa4 // indirect
 	github.com/sirupsen/logrus v1.8.1
-	github.com/stretchr/testify v1.7.1
+	github.com/stretchr/testify v1.8.0
 	github.com/tv42/httpunix v0.0.0-20191220191345-2ba4b9c3382c
 	github.com/vishvananda/netlink v1.1.1-0.20210330154013-f5de75959ad5
 	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74 // indirect
@@ -78,6 +79,8 @@ replace (
 	// Pin gPRC-related dependencies as like containerd v1.5.x.
 	google.golang.org/genproto => google.golang.org/genproto v0.0.0-20200224152610-e50cd9704f63
 	google.golang.org/grpc => google.golang.org/grpc v1.27.1
+
+	github.com/containernetworking/cni => github.com/containernetworking/cni v0.8.1-0.20201028171607-0050bfa52884
 )
 
 go 1.11
