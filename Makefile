@@ -329,7 +329,7 @@ tools/runc-builder-stamp: tools/docker/Dockerfile.runc-builder
 		tools/
 	touch $@
 
-$(RUNC_BIN): $(RUNC_DIR)/VERSION tools/runc-builder-stamp
+$(RUNC_BIN): $(RUNC_DIR)/VERSION #tools/runc-builder-stamp
 	docker run --rm --user $(UID) \
 		--volume $(CURDIR)/$(RUNC_DIR):/gopath/src/github.com/opencontainers/runc \
 		--volume $(CURDIR)/deps:/target \
