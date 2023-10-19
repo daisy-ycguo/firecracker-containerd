@@ -397,6 +397,12 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 		VMID:                     s.vmID,
 		ExitAfterAllTasksDeleted: exitAfterAllTasksDeleted,
 		ContainerCount:           int32(containerCount),
+		MachineCfg: &proto.FirecrackerMachineConfiguration{
+			CPUTemplate: s.config.CPUTemplate,
+			HtEnabled:   true,
+			MemSizeMib:  s.config.MemorySize,
+			VcpuCount:   s.config.CPUCount,
+		},
 	})
 	if err != nil {
 		errStatus, ok := status.FromError(err)
