@@ -62,6 +62,8 @@ type Config struct {
 	DebugHelper      *debug.Helper `json:"-"`
 	SnapshotMemFile  string        `json:"snapshot_mem_file"`
 	SnapshotMetaFile string        `json:"snapshot_meta_file"`
+	MemorySize       uint32        `json:"mem_size_mib"`
+	CPUCount         uint32        `json:"vcpu_count"`
 }
 
 // JailerConfig houses a set of configurable values for jailing
@@ -94,6 +96,8 @@ func LoadConfig(path string) (*Config, error) {
 		JailerConfig: JailerConfig{
 			RuncConfigPath: runcConfigPath,
 		},
+		MemorySize: 128,
+		CPUCount:   1,
 	}
 
 	flag, err := internal.SupportCPUTemplate()
