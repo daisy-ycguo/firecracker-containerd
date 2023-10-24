@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -99,6 +100,9 @@ const (
 	// taskExecID is a special exec ID that is pointing its task itself.
 	// While the constant is defined here, the convention is coming from containerd.
 	taskExecID = ""
+
+	// snapshotEnv is the name of the environment variable that is used to specify the path to the snapshot
+	snapshotEnv = "SNAPSHOT_PATH"
 )
 
 var (
@@ -632,8 +636,12 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 	}
 	s.logger.Info("End of setup network. Record timestamp!!!")
 
-	snapshotReq.MemFilePath = s.config.SnapshotMemFile
-	snapshotReq.SnapshotFilePath = s.config.SnapshotMetaFile
+	snapshotDir := os.Getenv(snapshotEnv)
+	snapshotReq.MemFilePath = filepath.Join(snapshotDir, `/mem_file`)
+	snapshotReq.SnapshotFilePath = filepath.Join(snapshotDir, `/snapshot_file`)
+
+	// snapshotReq.MemFilePath = s.config.SnapshotMemFile
+	// snapshotReq.SnapshotFilePath = s.config.SnapshotMetaFile
 	snapshotReq.EnableUserPF = false
 	snapshotReq.VMID = s.vmID
 	snapshotResp, err := s.LoadSnapshot(requestCtx, &snapshotReq)
@@ -722,9 +730,10 @@ func (s *service) CreateVM(requestCtx context.Context, request *proto.CreateVMRe
 	)
 	s.logger.Info("Into CreateVM. Record timestamp!!!")
 
-	// first time to check if load from snapshot
-	_, err = os.Stat(s.config.SnapshotMemFile)
-	if err == nil {
+	// first time to check snapshotEnv to verify if it is restored from snapshot
+	snapshotDir := os.Getenv(snapshotEnv)
+
+	if snapshotDir != "" {
 		s.isQuickStart = true
 		s.logger.Debug("!!!! into snapshot CreateVM")
 		resp, err = s.createVMFromSnapshot(requestCtx, request)
@@ -733,6 +742,18 @@ func (s *service) CreateVM(requestCtx context.Context, request *proto.CreateVMRe
 		s.logger.Debug("!!!! into triditional CreateVM")
 		resp, err = s.createVMCommon(requestCtx, request)
 	}
+
+	// _, err = os.Stat(s.config.SnapshotMemFile)
+	// if err == nil {
+	// 	s.isQuickStart = true
+	// 	s.logger.Debug("!!!! into snapshot CreateVM")
+	// 	resp, err = s.createVMFromSnapshot(requestCtx, request)
+	// } else {
+	// 	s.isQuickStart = false
+	// 	s.logger.Debug("!!!! into triditional CreateVM")
+	// 	resp, err = s.createVMCommon(requestCtx, request)
+	// }
+
 	s.logger.Info("End of CreateVM. Record timestamp!!!")
 	return resp, err
 }
@@ -1225,7 +1246,7 @@ func (s *service) GetBalloonStats(requestCtx context.Context, req *proto.GetBall
 	return resp, nil
 }
 
-//UpdateBalloonStats will update an existing balloon device statistics interval, before or after machine startup.
+// UpdateBalloonStats will update an existing balloon device statistics interval, before or after machine startup.
 func (s *service) UpdateBalloonStats(requestCtx context.Context, req *proto.UpdateBalloonStatsRequest) (*empty.Empty, error) {
 	defer logPanicAndDie(s.logger)
 
