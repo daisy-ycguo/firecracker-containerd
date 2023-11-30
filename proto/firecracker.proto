@@ -41,6 +41,7 @@ message CreateVMRequest {
     string MetricsFifoPath = 13;
 
     FirecrackerBalloonDevice BalloonDevice = 14;
+    string CNINetNS = 15;
 }
 
 message CreateVMResponse {

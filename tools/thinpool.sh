@@ -50,8 +50,8 @@ if [[ -z "$FICD_DM_VOLUME_GROUP" ]]; then
     pool_create() {
         mkdir -p $DIR
 
-        local datadev=$(create_loopback_device "$DIR/data" '10G')
-        local metadev=$(create_loopback_device "$DIR/metadata" '1G')
+        local datadev=$(create_loopback_device "$DIR/data" '100G')
+        local metadev=$(create_loopback_device "$DIR/metadata" '2G')
 
         local sectorsize=512
         local datasize="$(sudo blockdev --getsize64 -q ${datadev})"
