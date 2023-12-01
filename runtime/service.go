@@ -38,7 +38,6 @@ import (
 
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/cio"
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
@@ -52,7 +51,6 @@ import (
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/gofrs/uuid"
 	ptypes "github.com/gogo/protobuf/types"
-	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -338,6 +336,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	// In the shim start routine, we can assume that containerd provided a "log" FIFO in the current working dir.
 	// We have to use that instead of stdout/stderr because containerd reads the stdio pipes of shim start to get
 	// either the shim address or the error returned here.
+	// log.G(shimCtx).Debugf("-------------- shim start with opts ------------------%v", opts)
 	logFifo, err := fifo.OpenFifo(shimCtx, "log", unix.O_WRONLY, 0200)
 	if err != nil {
 		return "", err
@@ -356,9 +355,62 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	}
 	bundleDir := bundle.Dir(cwd)
 
+	log.Debug("bundle dir: ", cwd)
 	// Since we're running a shim start routine, we need to determine the vmID for the incoming
 	// container. Start by looking at the container's OCI annotations
+
+	// ------------------------ new code -----------------------------
+	log.Debug("bundle dir: ", cwd)
+	config_bytes, err := bundleDir.OCIConfig().Bytes()
+	if err != nil {
+		return "Failed to get oci config", err
+	}
+	// fmt.Println(config_bytes)
+	var config map[string]interface{}
+	json.Unmarshal(config_bytes, &config)
+	// fmt.Println(config)
+
+	cni_netns := ""
+	// fmt.Println("config annotations: ", config["annotaions"])
+	if config["annotations"] != nil {
+		annotations := config["annotations"].(map[string]interface{})
+
+		sandbox_id := ""
+		for k, v := range annotations {
+			if k == "io.kubernetes.cri.sandbox-id" {
+				sandbox_id = v.(string)
+			}
+		}
+
+		if sandbox_id != "" {
+			infracontainer_Dir := filepath.Join(filepath.Dir(cwd), sandbox_id)
+			infrabundleDir := bundle.Dir(infracontainer_Dir)
+			infra_config_bytes, err := infrabundleDir.OCIConfig().Bytes()
+			if err != nil {
+				log.Errorf("cannot find infra contaienr's OCI config")
+			}
+			var infra_config map[string]interface{}
+			json.Unmarshal(infra_config_bytes, &infra_config)
+			linux := infra_config["linux"].(map[string]interface{})
+			namespaces := linux["namespaces"].([]interface{})
+			for _, value := range namespaces {
+				value := value.(map[string]interface{})
+				if value["type"] == "network" {
+					cni_netns = value["path"].(string)
+				}
+			}
+			// fmt.Println("cni netns is", cni_netns)
+		}
+	}
+
+	// fmt.Println("cni netns is", cni_netns)
+
+	// ------------------------ new code -----------------------------
+
 	s.vmID, err = bundleDir.OCIConfig().VMID()
+	log.Debug("------------ shim start with ociconfig :---------")
+	log.Debug(bundleDir.OCIConfig())
+
 	if err != nil {
 		return "", err
 	}
@@ -407,6 +459,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 			MemSizeMib:  s.config.MemorySize,
 			VcpuCount:   s.config.CPUCount,
 		},
+		CNINetNS: cni_netns,
 	})
 	if err != nil {
 		errStatus, ok := status.FromError(err)
@@ -498,11 +551,12 @@ func (s *service) execCMD(requestCtx context.Context, cmdstr string) (string, er
 // Get IP address substring from the output of `ip addr show xxx`.
 // The output is like:
 // `2: veth0@if190: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
-//         link/ether aa:cb:78:61:46:da brd ff:ff:ff:ff:ff:ff link-netnsid 0
-//         inet 192.168.2.18/24 brd 192.168.2.255 scope global veth0
-//         valid_lft forever preferred_lft forever
-//         inet6 fe80::a8cb:78ff:fe61:46da/64 scope link
-//         valid_lft forever preferred_lft forever`
+//
+//	link/ether aa:cb:78:61:46:da brd ff:ff:ff:ff:ff:ff link-netnsid 0
+//	inet 192.168.2.18/24 brd 192.168.2.255 scope global veth0
+//	valid_lft forever preferred_lft forever
+//	inet6 fe80::a8cb:78ff:fe61:46da/64 scope link
+//	valid_lft forever preferred_lft forever`
 func get_ip_from_addr(addr string) string {
 	sl := strings.Fields(addr)
 	for index, str := range sl {
@@ -575,7 +629,7 @@ func (s *service) createVMFromSnapshot(requestCtx context.Context, request *prot
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get relative path to firecracker vsock")
 	}
-
+	// s.logger.Debugf("------------------- relVSockPath ----------------- : %s", relVSockPath)
 	jailedOpts, err := s.jailer.BuildJailedMachine(s.config, s.machineConfig, s.vmID)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to build jailed machine options")
@@ -770,6 +824,8 @@ func (s *service) createVMCommon(requestCtx context.Context, request *proto.Crea
 	defer logPanicAndDie(s.logger)
 
 	timeout := defaultCreateVMTimeout
+	timeout = 300 * time.Second
+
 	if request.TimeoutSeconds > 0 {
 		timeout = time.Duration(request.TimeoutSeconds) * time.Second
 	}
@@ -841,11 +897,13 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		}
 	}()
 
+	fmt.Println("create vm request: ", request)
+	// VMID:"9ac2c5cb-1f13-405d-90ef-1a18ae32236a" ContainerCount:1 ExitAfterAllTasksDeleted:true
+
 	namespace, ok := namespaces.Namespace(s.shimCtx)
 	if !ok {
 		namespace = namespaces.Default
 	}
-
 	dir, err := vm.ShimDir(s.config.ShimBaseDir, namespace, s.vmID)
 	if err != nil {
 		return err
@@ -870,6 +928,12 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 	if err != nil {
 		return errors.Wrapf(err, "failed to build VM configuration")
 	}
+	// Daisy TODO
+	s.logger.Debugf("request.CNINetNS:%s", request.CNINetNS)
+	if request.CNINetNS != "" {
+		s.machineConfig.NetNS = request.CNINetNS
+		//s.machineConfig.NetNS = "/var/run/netns/512d1ab1121212f4"
+	}
 
 	opts := []firecracker.Opt{}
 
@@ -879,6 +943,8 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		opts = append(opts, firecracker.WithLogger(logger))
 	}
 	relVSockPath, err := s.jailer.JailPath().FirecrackerVSockRelPath()
+
+	s.logger.Debug("FirecrackerVSockRelPath")
 	if err != nil {
 		return errors.Wrapf(err, "failed to get relative path to firecracker vsock")
 	}
@@ -910,6 +976,9 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 	// and have the SDK construct a new machine using that context. Otherwise, a
 	// custom process runner will be provided via options which will stomp over
 	// the shim context that was provided here.
+	fmt.Println("machineConfig1: ", s.machineConfig)
+	fmt.Println("machineConfig.netns: ", s.machineConfig.NetNS)
+
 	s.machine, err = firecracker.NewMachine(s.shimCtx, *s.machineConfig, opts...)
 	if err != nil {
 		return errors.Wrapf(err, "failed to create new machine instance")
@@ -969,7 +1038,7 @@ func (s *service) mountDrives(requestCtx context.Context) error {
 // If the VM has not been created yet and the timeout is hit waiting for it to exist, an error will be returned
 // but the shim will continue to shutdown. Similarly if we detect that the VM is in pause state, then
 // we are unable to communicate to the in-VM agent. In this case, we do a forceful shutdown.
-func (s *service) StopVM(requestCtx context.Context, request *proto.StopVMRequest) (_ *empty.Empty, err error) {
+func (s *service) StopVM(requestCtx context.Context, request *proto.StopVMRequest) (_ *ptypes.Empty, err error) {
 	s.logger.Debug("!!!! into runtime StopVM")
 	defer logPanicAndDie(s.logger)
 	s.logger.WithFields(logrus.Fields{"timeout_seconds": request.TimeoutSeconds}).Debug("StopVM")
@@ -990,7 +1059,7 @@ func (s *service) StopVM(requestCtx context.Context, request *proto.StopVMReques
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to stop VM in paused State")
 		}
-		return &empty.Empty{}, nil
+		return &ptypes.Empty{}, nil
 	}
 
 	err = s.waitVMReady()
@@ -1001,11 +1070,11 @@ func (s *service) StopVM(requestCtx context.Context, request *proto.StopVMReques
 	if err = s.shutdown(requestCtx, timeout, &taskAPI.ShutdownRequest{Now: true}); err != nil {
 		return nil, err
 	}
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 // ResumeVM resumes a VM
-func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*empty.Empty, error) {
+func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*ptypes.Empty, error) {
 	s.logger.Debug("!!!! into runtime ResumeVM")
 	defer logPanicAndDie(s.logger)
 
@@ -1020,11 +1089,11 @@ func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*em
 		return nil, err
 	}
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 // PauseVM pauses a VM
-func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*empty.Empty, error) {
+func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*ptypes.Empty, error) {
 	s.logger.Debug("!!!! into runtime PauseVM")
 	defer logPanicAndDie(s.logger)
 
@@ -1039,7 +1108,7 @@ func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*empt
 		return nil, err
 	}
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 // GetVMInfo returns metadata for the VM being managed by this shim. If the VM has not been created yet, this
@@ -1070,7 +1139,7 @@ func (s *service) GetVMInfo(requestCtx context.Context, request *proto.GetVMInfo
 
 // SetVMMetadata will update the VM being managed by this shim with the provided metadata. If the VM has not been created yet, this
 // method will wait for up to a hardcoded timeout for it to exist, returning an error if the timeout is reached.
-func (s *service) SetVMMetadata(requestCtx context.Context, request *proto.SetVMMetadataRequest) (*empty.Empty, error) {
+func (s *service) SetVMMetadata(requestCtx context.Context, request *proto.SetVMMetadataRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(s.logger)
 
 	err := s.waitVMReady()
@@ -1087,13 +1156,13 @@ func (s *service) SetVMMetadata(requestCtx context.Context, request *proto.SetVM
 		return nil, err
 	}
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 // UpdateVMMetadata updates the VM being managed by this shim with the provided metadata patch.
 // If the vm has not been created yet, this method will wait for up to the hardcoded timeout for it
 // to exist, returning an error if the timeout is reached.
-func (s *service) UpdateVMMetadata(requestCtx context.Context, request *proto.UpdateVMMetadataRequest) (*empty.Empty, error) {
+func (s *service) UpdateVMMetadata(requestCtx context.Context, request *proto.UpdateVMMetadataRequest) (*ptypes.Empty, error) {
 
 	defer logPanicAndDie(s.logger)
 
@@ -1111,7 +1180,7 @@ func (s *service) UpdateVMMetadata(requestCtx context.Context, request *proto.Up
 		return nil, err
 	}
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 // GetVMMetadata returns the metadata for the vm managed by this shim..
@@ -1186,7 +1255,7 @@ func (s *service) GetBalloonConfig(requestCtx context.Context, req *proto.GetBal
 }
 
 // UpdateBalloon will update an existing balloon device, before or after machine startup
-func (s *service) UpdateBalloon(requestCtx context.Context, req *proto.UpdateBalloonRequest) (*empty.Empty, error) {
+func (s *service) UpdateBalloon(requestCtx context.Context, req *proto.UpdateBalloonRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(s.logger)
 
 	err := s.waitVMReady()
@@ -1202,7 +1271,7 @@ func (s *service) UpdateBalloon(requestCtx context.Context, req *proto.UpdateBal
 		return nil, err
 	}
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 // GetBalloonStats will return the latest balloon device statistics, only if enabled pre-boot.
@@ -1253,7 +1322,7 @@ func (s *service) GetBalloonStats(requestCtx context.Context, req *proto.GetBall
 }
 
 // UpdateBalloonStats will update an existing balloon device statistics interval, before or after machine startup.
-func (s *service) UpdateBalloonStats(requestCtx context.Context, req *proto.UpdateBalloonStatsRequest) (*empty.Empty, error) {
+func (s *service) UpdateBalloonStats(requestCtx context.Context, req *proto.UpdateBalloonStatsRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(s.logger)
 
 	err := s.waitVMReady()
@@ -1269,11 +1338,11 @@ func (s *service) UpdateBalloonStats(requestCtx context.Context, req *proto.Upda
 		return nil, err
 	}
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker.Config, error) {
-	s.logger.Debug("!!! into buildVMConfiguration")
+	fmt.Println("!!! into buildVMConfiguration")
 	for _, driveMount := range req.DriveMounts {
 		// Verify the request specified an absolute path for the source/dest of drives.
 		// Otherwise, users can implicitly rely on the CWD of this shim or agent.
@@ -1282,6 +1351,7 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 		}
 	}
 
+	fmt.Println("req:========", req)
 	relSockPath, err := s.shimDir.FirecrackerSockRelPath()
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get relative path to firecracker api socket")
@@ -1381,6 +1451,8 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 
 	// If no value for NetworkInterfaces was specified (not even an empty but non-nil list) and
 	// the runtime config specifies a default list, use those defaults
+	fmt.Println("req.networkinterfaces: ", req.NetworkInterfaces)
+	fmt.Println("req.DefaultNetworkInterfaces: ", s.config.DefaultNetworkInterfaces)
 	if req.NetworkInterfaces == nil {
 		for _, ni := range s.config.DefaultNetworkInterfaces {
 			niCopy := ni // we don't want to allow any further calls to modify structs in s.config.DefaultNetworkInterfaces
@@ -1390,12 +1462,14 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 
 	for _, ni := range req.NetworkInterfaces {
 		netCfg, err := networkConfigFromProto(ni, s.vmID)
+		fmt.Println("netcfg's info: ", netCfg)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to convert network config %+v", ni)
 		}
 
 		cfg.NetworkInterfaces = append(cfg.NetworkInterfaces, *netCfg)
 	}
+	fmt.Println("final cfg:", cfg)
 
 	return &cfg, nil
 }
@@ -1503,6 +1577,8 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 		logger.WithError(err).Error()
 		return nil, err
 	}
+	// fmt.Println("hostbundledir is here: ", hostBundleDir)
+	// fmt.Println("hostbundledir.ociconfig is here: ", hostBundleDir.OCIConfig())
 
 	logger.WithFields(logrus.Fields{
 		"bundle":     request.Bundle,
@@ -1540,6 +1616,11 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 
 	s.taskDrivePathOnHost = rootfsMnt.Source
 
+	fmt.Println("hostbundledir is here: ", hostBundleDir)
+	fmt.Println("hostbundledir.ociconfig is here: ", hostBundleDir.OCIConfig())
+	fmt.Println("rootfsMnt.Source: ", rootfsMnt.Source)
+	fmt.Println("vmBundleDir.RootfsPath(): ", vmBundleDir.RootfsPath())
+
 	err = s.containerStubHandler.Reserve(requestCtx, request.ID,
 		rootfsMnt.Source, vmBundleDir.RootfsPath(), "ext4", nil, s.driveMountClient, s.machine)
 	if err != nil {
@@ -1552,6 +1633,60 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 	if err != nil {
 		return nil, err
 	}
+	// ------------------------- new code ---------------------------------------
+	var config map[string]interface{}
+	json.Unmarshal(ociConfigBytes, &config)
+	//fmt.Println("config: ", config)
+	linux := config["linux"].(map[string]interface{})
+	namespaces := linux["namespaces"].([]interface{})
+	for _, value := range namespaces {
+		value := value.(map[string]interface{})
+		if value["path"] != nil {
+			delete(value, "path")
+		}
+	}
+net:
+	for i := 0; i < len(namespaces); i++ {
+		ns := namespaces[i].(map[string]interface{})
+		if ns["type"] == "network" {
+			namespaces = append(namespaces[:i], namespaces[i+1:]...)
+			i--
+			continue net
+		}
+	}
+	linux["namespaces"] = namespaces
+
+	mounts := config["mounts"].([]interface{})
+mount:
+	for i := 0; i < len(mounts); i++ {
+		mount := mounts[i].(map[string]interface{})
+		if mount["destination"] == "/dev/shm" {
+			mount["type"] = "tmpfs"
+			mount["source"] = "shm"
+			mount["options"] = []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}
+		} else if mount["type"] == "bind" {
+			mounts = append(mounts[:i], mounts[i+1:]...)
+			i--
+			continue mount
+		}
+	}
+	config["mounts"] = mounts
+
+	//
+	// envs := process["env"].([]interface{})
+	// for i := 0; i < len(envs); i++ {
+	// 	if strings.HasPrefix(envs[i].(string), "HOSTNAME=") {
+	// 		envs[i] = "HOSTNAME=micro"
+	// 	}
+	// }
+
+	ociConfigBytes, err = json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Println("occonfig bytes :", string(ociConfigBytes))
+
+	//	------------------------- new code ---------------------------------------
 
 	extraData, err := s.generateExtraData(ociConfigBytes, request.Options)
 	if err != nil {
@@ -1559,6 +1694,8 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 		logger.WithError(err).Error()
 		return nil, err
 	}
+
+	fmt.Println("extradata.jsonspec is here: ", string(extraData.JsonSpec))
 
 	request.Options, err = ptypes.MarshalAny(extraData)
 	if err != nil {
@@ -1592,6 +1729,7 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 	// 	}
 	// } else {
 	//snapshot file not exists, create a new task
+	fmt.Println("before s.taskManager.CreateTask")
 	resp, err = s.taskManager.CreateTask(requestCtx, request, s.agentClient, ioConnectorSet, nil)
 	if err != nil {
 		err = errors.Wrap(err, "failed to create task")
@@ -1921,9 +2059,15 @@ func (s *service) Connect(requestCtx context.Context, req *taskAPI.ConnectReques
 	// Since task_pid inside the micro VM wouldn't make sense for clients,
 	// we intentionally return ErrNotImplemented instead of forwarding that to the guest-side shim.
 	// https://github.com/firecracker-microvm/firecracker-containerd/issues/210
-	log.G(requestCtx).WithField("task_id", req.ID).Error(`"connect" is not implemented by the shim`)
+	// log.G(requestCtx).WithField("task_id", req.ID).Error(`"connect" is not implemented by the shim`)
+	log.G(requestCtx).WithField("id", req.ID).Debug("connect")
+	resp, err := s.agentClient.Connect(requestCtx, req)
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, errdefs.ErrNotImplemented
+	// return nil, errdefs.ErrNotImplemented
+	return resp, nil
 }
 
 // Shutdown will shutdown of the VMM. Unlike StopVM, this method is only exposed to containerd itself.
@@ -2315,7 +2459,7 @@ func (s *service) LoadSnapshot(ctx context.Context, req *proto.LoadSnapshotReque
 }
 
 // CreateSnapshot Creates a snapshot of a VM
-func (s *service) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotRequest) (*empty.Empty, error) {
+func (s *service) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotRequest) (*ptypes.Empty, error) {
 	createSnapReq, err := formCreateSnapReq(req.SnapshotFilePath, req.MemFilePath)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create make snapshot request")
@@ -2332,12 +2476,12 @@ func (s *service) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotR
 		return nil, errors.New("Failed to make snapshot of VM")
 	}
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }
 
 // Offload Shuts down a VM and deletes the corresponding firecracker socket
 // and vsock. All of the other resources will persist
-func (s *service) Offload(ctx context.Context, req *proto.OffloadRequest) (*empty.Empty, error) {
+func (s *service) Offload(ctx context.Context, req *proto.OffloadRequest) (*ptypes.Empty, error) {
 	if err := syscall.Kill(s.firecrackerPid, 9); err != nil {
 		s.logger.WithError(err).Error("Failed to kill firecracker process")
 		return nil, err
@@ -2358,5 +2502,5 @@ func (s *service) Offload(ctx context.Context, req *proto.OffloadRequest) (*empt
 	// 	return nil, err
 	// }
 
-	return &empty.Empty{}, nil
+	return &ptypes.Empty{}, nil
 }

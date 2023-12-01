@@ -20,7 +20,9 @@ import (
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/ttrpc"
-	"github.com/golang/protobuf/ptypes/empty"
+
+	// "github.com/golang/protobuf/ptypes/empty"
+	ptypes "github.com/gogo/protobuf/types"
 
 	"github.com/firecracker-microvm/firecracker-containerd/proto"
 	fccontrol "github.com/firecracker-microvm/firecracker-containerd/proto/service/fccontrol/ttrpc"
@@ -72,17 +74,17 @@ func (s *service) CreateVM(ctx context.Context, req *proto.CreateVMRequest) (*pr
 	return s.local.CreateVM(ctx, req)
 }
 
-func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*empty.Empty, error) {
+func (s *service) PauseVM(ctx context.Context, req *proto.PauseVMRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debugf("pause VM request: %+v", req)
 	return s.local.PauseVM(ctx, req)
 }
 
-func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*empty.Empty, error) {
+func (s *service) ResumeVM(ctx context.Context, req *proto.ResumeVMRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debugf("resume VM request: %+v", req)
 	return s.local.ResumeVM(ctx, req)
 }
 
-func (s *service) StopVM(ctx context.Context, req *proto.StopVMRequest) (*empty.Empty, error) {
+func (s *service) StopVM(ctx context.Context, req *proto.StopVMRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debugf("stop VM: %+v", req)
 	return s.local.StopVM(ctx, req)
 }
@@ -92,12 +94,12 @@ func (s *service) GetVMInfo(ctx context.Context, req *proto.GetVMInfoRequest) (*
 	return s.local.GetVMInfo(ctx, req)
 }
 
-func (s *service) SetVMMetadata(ctx context.Context, req *proto.SetVMMetadataRequest) (*empty.Empty, error) {
+func (s *service) SetVMMetadata(ctx context.Context, req *proto.SetVMMetadataRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debug("Setting vm metadata")
 	return s.local.SetVMMetadata(ctx, req)
 }
 
-func (s *service) UpdateVMMetadata(ctx context.Context, req *proto.UpdateVMMetadataRequest) (*empty.Empty, error) {
+func (s *service) UpdateVMMetadata(ctx context.Context, req *proto.UpdateVMMetadataRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debug("Updating vm metadata")
 	return s.local.UpdateVMMetadata(ctx, req)
 }
@@ -112,7 +114,7 @@ func (s *service) GetBalloonConfig(ctx context.Context, req *proto.GetBalloonCon
 	return s.local.GetBalloonConfig(ctx, req)
 }
 
-func (s *service) UpdateBalloon(ctx context.Context, req *proto.UpdateBalloonRequest) (*empty.Empty, error) {
+func (s *service) UpdateBalloon(ctx context.Context, req *proto.UpdateBalloonRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debug("Updating balloon memory size")
 	return s.local.UpdateBalloon(ctx, req)
 }
@@ -122,7 +124,7 @@ func (s *service) GetBalloonStats(ctx context.Context, req *proto.GetBalloonStat
 	return s.local.GetBalloonStats(ctx, req)
 }
 
-func (s *service) UpdateBalloonStats(ctx context.Context, req *proto.UpdateBalloonStatsRequest) (*empty.Empty, error) {
+func (s *service) UpdateBalloonStats(ctx context.Context, req *proto.UpdateBalloonStatsRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debug("Updating balloon device statistics polling interval")
 	return s.local.UpdateBalloonStats(ctx, req)
 }
@@ -132,12 +134,12 @@ func (s *service) LoadSnapshot(ctx context.Context, req *proto.LoadSnapshotReque
 	return s.local.LoadSnapshot(ctx, req)
 }
 
-func (s *service) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotRequest) (*empty.Empty, error) {
+func (s *service) CreateSnapshot(ctx context.Context, req *proto.CreateSnapshotRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debugf("create snapshot request: %+v", req)
 	return s.local.CreateSnapshot(ctx, req)
 }
 
-func (s *service) Offload(ctx context.Context, req *proto.OffloadRequest) (*empty.Empty, error) {
+func (s *service) Offload(ctx context.Context, req *proto.OffloadRequest) (*ptypes.Empty, error) {
 	log.G(ctx).Debugf("offload request: %+v", req)
 	return s.local.Offload(ctx, req)
 }

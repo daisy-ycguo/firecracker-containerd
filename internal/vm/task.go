@@ -253,6 +253,7 @@ func (m *taskManager) CreateTask(
 
 	var initDone, copyDone <-chan error
 
+	fmt.Println("into internal.vm.task.CreateTask")
 	//make proc entry
 	proc, err := m.newProc(taskID, execID)
 	if err != nil {
@@ -265,7 +266,7 @@ func (m *taskManager) CreateTask(
 		}
 	}()
 
-	proc.logger.Debugf("!!! into internal vm create task, taskID=%s, execID=%s, isRestored=%v", taskID, execID,m.IsRestored())
+	proc.logger.Debugf("!!! into internal vm create task, taskID=%s, execID=%s, isRestored=%v", taskID, execID, m.IsRestored())
 	if m.IsRestored() {
 		//restored case
 		proc.logger.Debug("!!! into internal vm create task - restored")
