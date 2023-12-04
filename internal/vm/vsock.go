@@ -31,8 +31,7 @@ const (
 	vsockRetryInterval     = 100 * time.Millisecond
 	unixDialTimeout        = 100 * time.Millisecond
 	vsockConnectMsgTimeout = 100 * time.Millisecond
-	// vsockAckMsgTimeout     = 1 * time.Second
-	vsockAckMsgTimeout = 10 * time.Second
+	vsockAckMsgTimeout     = 1 * time.Second
 )
 
 // VSockDial attempts to connect to the Firecracker host-side vsock at the provided unix
@@ -207,7 +206,7 @@ func tryConnect(logger *logrus.Entry, udsPath string, port uint32) (net.Conn, er
 			}
 		}
 	}()
-	// logger = logger.WithField("attempt", attemptCount)
+
 	msg := vsockConnectMsg(port)
 
 	err = tryConnWrite(conn, msg, vsockConnectMsgTimeout)

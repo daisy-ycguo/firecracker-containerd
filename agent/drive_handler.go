@@ -24,14 +24,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/mount"
-	"github.com/firecracker-microvm/firecracker-containerd/internal"
-	drivemount "github.com/firecracker-microvm/firecracker-containerd/proto/service/drivemount/ttrpc"
-
-	// "github.com/golang/protobuf/ptypes/empty"
 	types "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
+
+	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/mount"
+
+	"github.com/firecracker-microvm/firecracker-containerd/internal"
+	drivemount "github.com/firecracker-microvm/firecracker-containerd/proto/service/drivemount/ttrpc"
 )
 
 const (

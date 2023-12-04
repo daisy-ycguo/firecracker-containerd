@@ -21,7 +21,6 @@ import (
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/ttrpc"
 
-	// "github.com/golang/protobuf/ptypes/empty"
 	ptypes "github.com/gogo/protobuf/types"
 
 	"github.com/firecracker-microvm/firecracker-containerd/proto"

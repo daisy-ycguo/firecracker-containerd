@@ -253,9 +253,9 @@ func (m *taskManager) CreateTask(
 
 	var initDone, copyDone <-chan error
 
-	fmt.Println("into internal.vm.task.CreateTask")
 	//make proc entry
 	proc, err := m.newProc(taskID, execID)
+	proc.logger.Debugf("into internal.vm.task.CreateTask")
 	if err != nil {
 		return nil, err
 	}
