@@ -67,6 +67,7 @@ type local struct {
 	containerdAddress string
 	logger            *logrus.Entry
 	config            *config.Config
+	shimPID           int
 
 	processesMu sync.Mutex
 	processes   map[string]int32
@@ -122,7 +123,22 @@ func (s *local) CreateVM(requestCtx context.Context, req *proto.CreateVMRequest)
 
 	shimSocket, err := shim.NewSocket(shimSocketAddress)
 	if shim.SocketEaddrinuse(err) {
-		return nil, status.Errorf(codes.AlreadyExists, "VM with ID %q already exists (socket: %q)", id, shimSocketAddress)
+		s.logger.Debugf("VM with ID %q already exists (socket: %q)", id, shimSocketAddress)
+		//return nil, status.Errorf(codes.AlreadyExists, "VM with ID %q already exists (socket: %q)", id, shimSocketAddress)
+		//get vm info and create response
+		vminfo, err := s.GetVMInfo(requestCtx, &proto.GetVMInfoRequest{VMID: id})
+		if err != nil {
+			s.logger.Debugf("GetVMInfo ID %q failed %q", id, err)
+			return nil, status.Errorf(codes.AlreadyExists, "VM with ID %q already exists (socket: %q)", id, shimSocketAddress)
+		}
+		return &proto.CreateVMResponse{
+			VMID:            vminfo.VMID,
+			SocketPath:      vminfo.SocketPath,
+			LogFifoPath:     vminfo.LogFifoPath,
+			MetricsFifoPath: vminfo.MetricsFifoPath,
+			CgroupPath:      vminfo.CgroupPath,
+			//FirecrackerPID: vminfo.F,
+		}, nil
 	} else if err != nil {
 		err = errors.Wrapf(err, "failed to open shim socket at address %q", shimSocketAddress)
 		s.logger.WithError(err).Error()
@@ -181,6 +197,7 @@ func (s *local) CreateVM(requestCtx context.Context, req *proto.CreateVMRequest)
 		return nil, err
 	}
 	s.logger.Info("Shim process started, Record timestamp!!!")
+	s.shimPID = cmd.Process.Pid
 
 	defer func() {
 		if err != nil {
@@ -458,6 +475,7 @@ func (s *local) newShim(ns, vmID, containerdAddress string, shimSocket *net.Unix
 		"-address", containerdAddress,
 	}
 
+	//exec a shim command
 	cmd := exec.Command(internal.ShimBinaryName, args...)
 
 	shimDir, err := vm.ShimDir(s.config.ShimBaseDir, ns, vmID)
@@ -508,6 +526,7 @@ func (s *local) newShim(ns, vmID, containerdAddress string, shimSocket *net.Unix
 	cmd.Stdout = logger.Logger.Out
 
 	logger.Debugf("starting %s", internal.ShimBinaryName)
+	logger.Debugf("starting binary: %v \n", cmd)
 
 	err = cmd.Start()
 	if err != nil {
@@ -519,6 +538,7 @@ func (s *local) newShim(ns, vmID, containerdAddress string, shimSocket *net.Unix
 	// make sure to wait after start
 	go func() {
 		if err := cmd.Wait(); err != nil {
+			logger.Errorf("error happen, err=%v", err)
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				// shim is usually terminated by cancelling the context
 				logger.WithError(exitErr).Debug("shim has been terminated")
