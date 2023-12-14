@@ -101,6 +101,8 @@ const (
 
 	// snapshotEnv is the name of the environment variable that is used to specify the path to the snapshot
 	snapshotEnv = "SNAPSHOT_PATH"
+
+	//fakeSandboxContainerPID = uint32(0)
 )
 
 var (
@@ -118,7 +120,8 @@ type loadSnapReq struct {
 
 // implements shimapi
 type service struct {
-	isQuickStart bool
+	isQuickStart               bool
+	fackSandboxContainerTaskID string
 	//taskID        string
 	taskManager   vm.TaskManager
 	eventExchange *exchange.Exchange
@@ -144,6 +147,7 @@ type service struct {
 	// v2 implementation
 	shimCtx    context.Context
 	shimCancel func()
+	//shimPID    int
 
 	vmID    string
 	shimDir vm.Dir
@@ -336,7 +340,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	// In the shim start routine, we can assume that containerd provided a "log" FIFO in the current working dir.
 	// We have to use that instead of stdout/stderr because containerd reads the stdio pipes of shim start to get
 	// either the shim address or the error returned here.
-	// log.G(shimCtx).Debugf("-------------- shim start with opts ------------------%v", opts)
+	// debug.PrintStack()
 	logFifo, err := fifo.OpenFifo(shimCtx, "log", unix.O_WRONLY, 0200)
 	if err != nil {
 		return "", err
@@ -345,7 +349,9 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	logrus.SetOutput(logFifo)
 
 	log := log.G(shimCtx).WithField("task_id", opts.ID)
+	s.logger = log
 	log.Info("StartShim, Record timestamp!!!")
+	s.logger.Info("end of ShartShim")
 
 	// If we are running a shim start routine, we can safely assume our current working
 	// directory is the bundle directory
@@ -400,6 +406,9 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 				}
 			}
 			// fmt.Println("cni netns is", cni_netns)
+			// set vmID to sandbox_id if exist.
+			log.Debugf("set vmID to sandbox_id: %s", sandbox_id)
+			s.vmID = sandbox_id
 		}
 	}
 
@@ -407,7 +416,10 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 
 	// ------------------------ new code -----------------------------
 
-	s.vmID, err = bundleDir.OCIConfig().VMID()
+	if s.vmID == "" {
+		s.vmID, err = bundleDir.OCIConfig().VMID()
+		log.Debugf("get vmID from OCIConfig: %s", s.vmID)
+	}
 	log.Debug("------------ shim start with ociconfig :---------")
 	log.Debug(bundleDir.OCIConfig())
 
@@ -419,6 +431,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	containerCount := 0
 
 	if s.vmID == "" {
+		log.Debugf("generate vmID")
 		// If here, no VMID has been provided by the client for this container, so auto-generate a new one.
 		// This results in a default behavior of running each container in its own VM if not otherwise
 		// specified by the client.
@@ -427,6 +440,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 			return "", errors.Wrap(err, "failed to generate UUID for VMID")
 		}
 		s.vmID = uuid.String()
+		log.Debugf("generate vmID: %s", s.vmID)
 
 		// This request is handled by a short-lived shim process to find its control socket.
 		// A long-running shim process won't have the request. So, setting s.logger doesn't affect others.
@@ -461,6 +475,9 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 		},
 		CNINetNS: cni_netns,
 	})
+	//s.shimPID = fcControlClient.ShimPID
+	//s.firecrackerPid = vmResp.FirecrackerPID
+
 	if err != nil {
 		errStatus, ok := status.FromError(err)
 		// ignore AlreadyExists errors, that just means the shim is already up and running
@@ -480,6 +497,7 @@ func (s *service) StartShim(shimCtx context.Context, opts shim.StartOpts) (strin
 	}
 	log.WithField("vmID", s.vmID).Infof("successfully started shim (git commit: %s).%s", revision, str)
 
+	//s.logger.Info("end of ShartShim")
 	return shim.SocketAddress(shimCtx, opts.Address, s.vmID)
 }
 
@@ -897,7 +915,7 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		}
 	}()
 
-	fmt.Println("create vm request: ", request)
+	s.logger.Debugf("create vm request: %v", request)
 	// VMID:"9ac2c5cb-1f13-405d-90ef-1a18ae32236a" ContainerCount:1 ExitAfterAllTasksDeleted:true
 
 	namespace, ok := namespaces.Namespace(s.shimCtx)
@@ -929,11 +947,11 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 		return errors.Wrapf(err, "failed to build VM configuration")
 	}
 	// Daisy TODO
-	s.logger.Debugf("request.CNINetNS:%s", request.CNINetNS)
-	if request.CNINetNS != "" {
-		s.machineConfig.NetNS = request.CNINetNS
-		//s.machineConfig.NetNS = "/var/run/netns/512d1ab1121212f4"
-	}
+	// s.logger.Debugf("request.CNINetNS:%s", request.CNINetNS)
+	// if request.CNINetNS != "" {
+	// 	s.machineConfig.NetNS = request.CNINetNS
+	// 	//s.machineConfig.NetNS = "/var/run/netns/512d1ab1121212f4"
+	// }
 
 	opts := []firecracker.Opt{}
 
@@ -976,8 +994,8 @@ func (s *service) createVM(requestCtx context.Context, request *proto.CreateVMRe
 	// and have the SDK construct a new machine using that context. Otherwise, a
 	// custom process runner will be provided via options which will stomp over
 	// the shim context that was provided here.
-	fmt.Println("machineConfig1: ", s.machineConfig)
-	fmt.Println("machineConfig.netns: ", s.machineConfig.NetNS)
+	s.logger.Debugf("machineConfig: ", s.machineConfig)
+	//s.logger.Debugf("machineConfig.netns: ", s.machineConfig.NetNS)
 
 	s.machine, err = firecracker.NewMachine(s.shimCtx, *s.machineConfig, opts...)
 	if err != nil {
@@ -1342,7 +1360,7 @@ func (s *service) UpdateBalloonStats(requestCtx context.Context, req *proto.Upda
 }
 
 func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker.Config, error) {
-	fmt.Println("!!! into buildVMConfiguration")
+	s.logger.Debug("!!! into buildVMConfiguration")
 	for _, driveMount := range req.DriveMounts {
 		// Verify the request specified an absolute path for the source/dest of drives.
 		// Otherwise, users can implicitly rely on the CWD of this shim or agent.
@@ -1351,7 +1369,7 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 		}
 	}
 
-	fmt.Println("req:========", req)
+	s.logger.Debug("req:========", req)
 	relSockPath, err := s.shimDir.FirecrackerSockRelPath()
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get relative path to firecracker api socket")
@@ -1442,7 +1460,6 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 		return nil, errors.Wrapf(err, "failed to create container stub drives")
 	}
 
-	s.logger.Debug("!!! to CreateContainerStubs")
 	s.driveMountStubs, err = CreateDriveMountStubs(
 		&cfg, s.jailer, req.DriveMounts, s.logger)
 	if err != nil {
@@ -1451,8 +1468,8 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 
 	// If no value for NetworkInterfaces was specified (not even an empty but non-nil list) and
 	// the runtime config specifies a default list, use those defaults
-	fmt.Println("req.networkinterfaces: ", req.NetworkInterfaces)
-	fmt.Println("req.DefaultNetworkInterfaces: ", s.config.DefaultNetworkInterfaces)
+	s.logger.Debugf("req.networkinterfaces: ", req.NetworkInterfaces)
+	s.logger.Debugf("req.DefaultNetworkInterfaces: ", s.config.DefaultNetworkInterfaces)
 	if req.NetworkInterfaces == nil {
 		for _, ni := range s.config.DefaultNetworkInterfaces {
 			niCopy := ni // we don't want to allow any further calls to modify structs in s.config.DefaultNetworkInterfaces
@@ -1462,14 +1479,14 @@ func (s *service) buildVMConfiguration(req *proto.CreateVMRequest) (*firecracker
 
 	for _, ni := range req.NetworkInterfaces {
 		netCfg, err := networkConfigFromProto(ni, s.vmID)
-		fmt.Println("netcfg's info: ", netCfg)
+		s.logger.Debugf("netcfg's info: ", netCfg)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to convert network config %+v", ni)
 		}
 
 		cfg.NetworkInterfaces = append(cfg.NetworkInterfaces, *netCfg)
 	}
-	fmt.Println("final cfg:", cfg)
+	s.logger.Debugf("final cfg:", cfg)
 
 	return &cfg, nil
 }
@@ -1562,14 +1579,28 @@ func (s *service) deleteFIFOs(taskID, execID string) error {
 	return nil
 }
 
+// Daisy's comment: the service is TaskService, not same as the service of s.StartShim()
 func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
-	s.logger.Info("Into Create Task, Record timestamp!!!")
+	logger := log.G(requestCtx).WithFields(logrus.Fields{"task_id": request.ID})
+
+	logger.Info("into fccd.runtime.service.Create")
+	//s.logger = log.G(requestCtx).WithFields(logrus.Fields{"task_id": request.ID})
+	// logFifo, err := fifo.OpenFifo(requestCtx, "log", unix.O_WRONLY, 0200)
+	// if err != nil {
+	// 	fmt.Printf("failed to create log fifo, return error:%s \n", err)
+	// 	return nil, fmt.Errorf("failed to create log fifo:%s", err)
+	// }
+	// logrus.SetOutput(logFifo)
+
+	s.logger = logger
+	s.logger.Info("---into Container's NewTask!!!---, Record timestamp!!!")
+	s.logger.Infof("request=%v\n", request)
 
 	var (
 		resp *taskAPI.CreateTaskResponse
 	)
 
-	logger := s.logger.WithField("task_id", request.ID)
+	//logger := s.logger.WithField("task_id", request.ID)
 	defer logPanicAndDie(logger)
 
 	err := s.waitVMReady()
@@ -1591,6 +1622,31 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 	}).Debug("creating task")
 
 	hostBundleDir := bundle.Dir(request.Bundle)
+
+	//Daisy, TODO
+	//Check if config["annotations"]["io.kubernetes.cri.container-type"] ==  "sandbox"
+	//if "sandbox", do nothing, and return
+	//if "container", do the following
+	ociConfigBytes, err := hostBundleDir.OCIConfig().Bytes()
+	if err != nil {
+		return nil, err
+	}
+	var config map[string]interface{}
+	json.Unmarshal(ociConfigBytes, &config)
+	//Daisy check annotation
+	annotation := config["annotations"].(map[string]interface{})
+	s.logger.Infof("config[\"annotations\"][\"io.kubernetes.cri.container-type\"]=%s\n", annotation["io.kubernetes.cri.container-type"].(string))
+	if "sandbox" == annotation["io.kubernetes.cri.container-type"].(string) {
+		s.logger.Infof("Create Sandbox container, do nothing")
+		s.logger.Infof("firecracerPID=%s", s.firecrackerPid)
+		s.fackSandboxContainerTaskID = request.ID
+		createResp := &taskAPI.CreateTaskResponse{Pid: uint32(s.firecrackerPid)}
+		s.logger.Info("Out of Create Task, Record timestamp!!!")
+		return createResp, nil
+	}
+	//end of check annotation
+	//Daisy, End of TODO
+
 	vmBundleDir := bundle.VMBundleDir(request.ID)
 
 	err = s.shimDir.CreateBundleLink(request.ID, hostBundleDir)
@@ -1616,10 +1672,10 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 
 	s.taskDrivePathOnHost = rootfsMnt.Source
 
-	fmt.Println("hostbundledir is here: ", hostBundleDir)
-	fmt.Println("hostbundledir.ociconfig is here: ", hostBundleDir.OCIConfig())
-	fmt.Println("rootfsMnt.Source: ", rootfsMnt.Source)
-	fmt.Println("vmBundleDir.RootfsPath(): ", vmBundleDir.RootfsPath())
+	//fmt.Println("hostbundledir is here: ", hostBundleDir)
+	//fmt.Println("hostbundledir.ociconfig is here: ", hostBundleDir.OCIConfig())
+	//fmt.Println("rootfsMnt.Source: ", rootfsMnt.Source)
+	//fmt.Println("vmBundleDir.RootfsPath(): ", vmBundleDir.RootfsPath())
 
 	err = s.containerStubHandler.Reserve(requestCtx, request.ID,
 		rootfsMnt.Source, vmBundleDir.RootfsPath(), "ext4", nil, s.driveMountClient, s.machine)
@@ -1629,13 +1685,7 @@ func (s *service) Create(requestCtx context.Context, request *taskAPI.CreateTask
 		return nil, err
 	}
 
-	ociConfigBytes, err := hostBundleDir.OCIConfig().Bytes()
-	if err != nil {
-		return nil, err
-	}
 	// ------------------------- new code ---------------------------------------
-	var config map[string]interface{}
-	json.Unmarshal(ociConfigBytes, &config)
 	//fmt.Println("config: ", config)
 	linux := config["linux"].(map[string]interface{})
 	namespaces := linux["namespaces"].([]interface{})
@@ -1684,7 +1734,7 @@ mount:
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("occonfig bytes :", string(ociConfigBytes))
+	//fmt.Println("occonfig bytes :", string(ociConfigBytes))
 
 	//	------------------------- new code ---------------------------------------
 
@@ -1695,7 +1745,7 @@ mount:
 		return nil, err
 	}
 
-	fmt.Println("extradata.jsonspec is here: ", string(extraData.JsonSpec))
+	//s.logger.Debug("extradata.jsonspec is here: ", string(extraData.JsonSpec))
 
 	request.Options, err = ptypes.MarshalAny(extraData)
 	if err != nil {
@@ -1729,7 +1779,7 @@ mount:
 	// 	}
 	// } else {
 	//snapshot file not exists, create a new task
-	fmt.Println("before s.taskManager.CreateTask")
+	s.logger.Debug("before s.taskManager.CreateTask")
 	resp, err = s.taskManager.CreateTask(requestCtx, request, s.agentClient, ioConnectorSet, nil)
 	if err != nil {
 		err = errors.Wrap(err, "failed to create task")
@@ -1768,14 +1818,20 @@ func (s *service) Start(requestCtx context.Context, req *taskAPI.StartRequest) (
 		err  error
 	)
 
-	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Debug("start")
+	s.logger.WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Info("start")
 	//_, err := os.Stat(s.config.SnapshotMemFile)
-	//snapshot file exists,load from snapshot
-	if s.isQuickStart {
-		//TODO need to get PID from agent
-		resp = &taskAPI.StartResponse{Pid: 796}
+	//if req.ID is s.fackSandboxContainerTaskID, it means the start request is to start a fack container
+	if s.fackSandboxContainerTaskID == req.ID {
+		resp = &taskAPI.StartResponse{Pid: uint32(s.firecrackerPid)}
+		s.logger.Info("Start Sandbox container, do nothing")
 	} else {
-		resp, err = s.agentClient.Start(requestCtx, req)
+		//snapshot file exists,load from snapshot
+		if s.isQuickStart {
+			//TODO need to get PID from agent
+			resp = &taskAPI.StartResponse{Pid: 796}
+		} else {
+			resp, err = s.agentClient.Start(requestCtx, req)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -1789,7 +1845,7 @@ func (s *service) Delete(requestCtx context.Context, req *taskAPI.DeleteRequest)
 	defer logPanicAndDie(log.G(requestCtx))
 	logger := log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID})
 
-	logger.Debug("delete")
+	logger.Info("delete")
 
 	resp, err := s.taskManager.DeleteProcess(requestCtx, req, s.agentClient)
 	if err != nil {
@@ -1835,7 +1891,7 @@ func (s *service) Delete(requestCtx context.Context, req *taskAPI.DeleteRequest)
 func (s *service) Exec(requestCtx context.Context, req *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 	logger := s.logger.WithField("task_id", req.ID).WithField("exec_id", req.ExecID)
-	logger.Debug("exec")
+	logger.Info("exec")
 
 	// no OCI config bytes to provide for Exec, just leave those fields empty
 	extraData, err := s.generateExtraData(nil, req.Spec)
@@ -1878,7 +1934,7 @@ func (s *service) Exec(requestCtx context.Context, req *taskAPI.ExecProcessReque
 // ResizePty of a process
 func (s *service) ResizePty(requestCtx context.Context, req *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
-	s.logger.Debug("ResizePty")
+	s.logger.Info("ResizePty")
 
 	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Debug("resize_pty")
 	resp, err := s.agentClient.ResizePty(requestCtx, req)
@@ -1895,6 +1951,13 @@ func (s *service) State(requestCtx context.Context, req *taskAPI.StateRequest) (
 
 	logger := log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID})
 	logger.Info("Into State, Record timestamp!!!")
+	//if req.ID is s.fackSandboxContainerTaskID, it means the start request is to start a fack container
+	if s.fackSandboxContainerTaskID == req.ID {
+		resp := &taskAPI.StateResponse{ID: req.ID, Pid: uint32(s.firecrackerPid), Status: task.StatusRunning}
+		s.logger.Info("State Sandbox container, do nothing")
+		logger.Info("Out of State, Record timestamp!!!")
+		return resp, nil
+	}
 	resp, err := s.agentClient.State(requestCtx, req)
 	if err != nil {
 		logger.Debug("agent.state error")
@@ -1979,7 +2042,7 @@ func (s *service) attachNewProxy(
 func (s *service) Pause(requestCtx context.Context, req *taskAPI.PauseRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 
-	log.G(requestCtx).WithField("task_id", req.ID).Debug("pause")
+	log.G(requestCtx).WithField("task_id", req.ID).Info("pause")
 	resp, err := s.agentClient.Pause(requestCtx, req)
 	if err != nil {
 		return nil, err
@@ -1992,7 +2055,7 @@ func (s *service) Pause(requestCtx context.Context, req *taskAPI.PauseRequest) (
 func (s *service) Resume(requestCtx context.Context, req *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 
-	log.G(requestCtx).WithField("task_id", req.ID).Debug("resume")
+	log.G(requestCtx).WithField("task_id", req.ID).Info("resume")
 	resp, err := s.agentClient.Resume(requestCtx, req)
 	if err != nil {
 		return nil, err
@@ -2005,7 +2068,7 @@ func (s *service) Resume(requestCtx context.Context, req *taskAPI.ResumeRequest)
 func (s *service) Kill(requestCtx context.Context, req *taskAPI.KillRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 
-	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Debug("kill")
+	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Info("kill")
 	resp, err := s.agentClient.Kill(requestCtx, req)
 	if err != nil {
 		return nil, err
@@ -2017,7 +2080,7 @@ func (s *service) Kill(requestCtx context.Context, req *taskAPI.KillRequest) (*p
 func (s *service) Pids(requestCtx context.Context, req *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 
-	log.G(requestCtx).WithField("task_id", req.ID).Debug("pids")
+	log.G(requestCtx).WithField("task_id", req.ID).Info("pids")
 	resp, err := s.agentClient.Pids(requestCtx, req)
 	if err != nil {
 		return nil, err
@@ -2030,7 +2093,7 @@ func (s *service) Pids(requestCtx context.Context, req *taskAPI.PidsRequest) (*t
 func (s *service) CloseIO(requestCtx context.Context, req *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 
-	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Debug("close_io")
+	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Info("close_io")
 	resp, err := s.agentClient.CloseIO(requestCtx, req)
 	if err != nil {
 		return nil, err
@@ -2043,7 +2106,7 @@ func (s *service) CloseIO(requestCtx context.Context, req *taskAPI.CloseIOReques
 func (s *service) Checkpoint(requestCtx context.Context, req *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
 
-	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "path": req.Path}).Debug("checkpoint")
+	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "path": req.Path}).Info("checkpoint")
 	resp, err := s.agentClient.Checkpoint(requestCtx, req)
 	if err != nil {
 		return nil, err
@@ -2060,12 +2123,17 @@ func (s *service) Connect(requestCtx context.Context, req *taskAPI.ConnectReques
 	// we intentionally return ErrNotImplemented instead of forwarding that to the guest-side shim.
 	// https://github.com/firecracker-microvm/firecracker-containerd/issues/210
 	// log.G(requestCtx).WithField("task_id", req.ID).Error(`"connect" is not implemented by the shim`)
-	log.G(requestCtx).WithField("id", req.ID).Debug("connect")
+	log.G(requestCtx).WithField("id", req.ID).Info("into fccd.runtime.service.connect")
 	resp, err := s.agentClient.Connect(requestCtx, req)
 	if err != nil {
 		return nil, err
 	}
+	log.G(requestCtx).WithField("id", req.ID).Infof("after agent.connect, resp=", resp)
 
+	//if req.ID is s.fackSandboxContainerTaskID, it means the start request is to start a fack container
+	if s.fackSandboxContainerTaskID == req.ID {
+		resp.TaskPid = uint32(s.firecrackerPid)
+	}
 	// return nil, errdefs.ErrNotImplemented
 	return resp, nil
 }
@@ -2081,7 +2149,7 @@ func (s *service) Connect(requestCtx context.Context, req *taskAPI.ConnectReques
 // * After any task Create call returns an error
 func (s *service) Shutdown(requestCtx context.Context, req *taskAPI.ShutdownRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
-	s.logger.WithFields(logrus.Fields{"task_id": req.ID, "now": req.Now}).Debug("Shutdown")
+	s.logger.WithFields(logrus.Fields{"task_id": req.ID, "now": req.Now}).Info("Shutdown")
 
 	shouldShutdown := req.Now || s.exitAfterAllTasksDeleted && s.taskManager.ShutdownIfEmpty()
 	if !shouldShutdown {
@@ -2180,7 +2248,7 @@ func (s *service) shutdownLoop(
 
 func (s *service) Stats(requestCtx context.Context, req *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
-	log.G(requestCtx).WithField("task_id", req.ID).Debug("stats")
+	log.G(requestCtx).WithField("task_id", req.ID).Info("stats")
 
 	resp, err := s.agentClient.Stats(requestCtx, req)
 	if err != nil {
@@ -2193,7 +2261,7 @@ func (s *service) Stats(requestCtx context.Context, req *taskAPI.StatsRequest) (
 // Update a running container
 func (s *service) Update(requestCtx context.Context, req *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
 	defer logPanicAndDie(log.G(requestCtx))
-	log.G(requestCtx).WithField("task_id", req.ID).Debug("update")
+	log.G(requestCtx).WithField("task_id", req.ID).Info("update")
 
 	resp, err := s.agentClient.Update(requestCtx, req)
 	if err != nil {
@@ -2206,10 +2274,21 @@ func (s *service) Update(requestCtx context.Context, req *taskAPI.UpdateTaskRequ
 // Wait for a process to exit
 func (s *service) Wait(requestCtx context.Context, req *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
 	defer logPanicAndDie(log.G(requestCtx))
-	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Debug("wait")
+	log.G(requestCtx).WithFields(logrus.Fields{"task_id": req.ID, "exec_id": req.ExecID}).Info("fccd.runtime.service.Wait")
+
+	//if req.ID is s.fackSandboxContainerTaskID, it means the start request is to start a fack container
+	if s.fackSandboxContainerTaskID == req.ID {
+		err := s.machine.Wait(requestCtx)
+		if err != nil {
+			log.G(requestCtx).Info("error happened in fccd.runtime.service.WaitVM, %q", err)
+			return nil, err
+		}
+		log.G(requestCtx).Info("finish of fccd.runtime.service.WaitVM, going to return")
+	}
 
 	resp, err := s.agentClient.Wait(requestCtx, req)
 	if err != nil {
+		log.G(requestCtx).Info("error happened in fccd.runtime.service.Wait, %q", err)
 		return nil, err
 	}
 

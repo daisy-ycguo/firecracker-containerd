@@ -63,7 +63,8 @@ const (
 	FCSocketFDEnvKey = "FCCONTROL_SOCKET_FD"
 
 	// ShimBinaryName is the name of the runtime shim binary
-	ShimBinaryName = "containerd-shim-aws-firecracker"
+	//ShimBinaryName = "containerd-shim-aws-firecracker"
+	ShimBinaryName = "containerd-shim-firecracker-v2"
 )
 
 // MagicStubBytes used to determine whether or not a drive is a stub drive
