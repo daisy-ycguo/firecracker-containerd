@@ -57,6 +57,8 @@ func machineConfigurationFromProto(cfg *config.Config, req *proto.FirecrackerMac
 
 	config.HtEnabled = firecracker.Bool(req.HtEnabled)
 
+	config.TrackDirtyPages = *firecracker.Bool(req.TrackDirtyPages)
+
 	return config
 }
 

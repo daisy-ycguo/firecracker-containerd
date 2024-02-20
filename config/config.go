@@ -64,6 +64,7 @@ type Config struct {
 	SnapshotMetaFile string        `json:"snapshot_meta_file"`
 	MemorySize       uint32        `json:"mem_size_mib"`
 	CPUCount         uint32        `json:"vcpu_count"`
+	TrackDirtyPages  bool          `json:"track_dirty_pages"`
 }
 
 // JailerConfig houses a set of configurable values for jailing
